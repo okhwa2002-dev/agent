@@ -15,7 +15,7 @@ export const faultParser: DomainParser<FaultRecord> = {
     return { ftp: str(msg.ftp), sp: str(msg.sp), pcode: str(msg.pcode) };
   },
 
-  insert(repo: DomainRepo, messageId: string, parsed: FaultRecord): Promise<void> {
-    return repo.insertFault(messageId, parsed);
+  insert(repo: DomainRepo, messageId: string, deviceId: string, parsed: FaultRecord): Promise<void> {
+    return repo.insertFault(messageId, deviceId, parsed);
   },
 };

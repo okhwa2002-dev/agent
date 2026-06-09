@@ -4,5 +4,5 @@ import type { DomainRepo } from '../repo/domainRepo.js';
 export interface DomainParser<T> {
   readonly messageCode: string;
   parse(rawPayload: unknown): T;
-  insert(repo: DomainRepo, messageId: string, parsed: T): Promise<void>;
+  insert(repo: DomainRepo, messageId: string, deviceId: string, parsed: T): Promise<void>;
 }
