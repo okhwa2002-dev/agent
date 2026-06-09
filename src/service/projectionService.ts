@@ -12,7 +12,7 @@ export class ProjectionService {
     private readonly errorRepo: ErrorRepo,
   ) {}
 
-  async project(messageId: string, messageCode: string, rawPayload: unknown): Promise<void> {
+  async project(messageId: string, deviceId: string, messageCode: string, rawPayload: unknown): Promise<void> {
     const parser = this.registry.get(messageCode);
     if (!parser) {
       await this.rawRepo.markStatus(messageId, 'parse_error');
@@ -21,7 +21,7 @@ export class ProjectionService {
     }
     try {
       const parsed = parser.parse(rawPayload);
-      await parser.insert(this.domainRepo, messageId, parsed);
+      await parser.insert(this.domainRepo, messageId, deviceId, parsed);
       await this.rawRepo.markStatus(messageId, 'parsed');
     } catch (err) {
       await this.rawRepo.markStatus(messageId, 'parse_error');
