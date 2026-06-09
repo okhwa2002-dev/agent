@@ -5,8 +5,10 @@ import { DeviceRepo } from './repo/deviceRepo.js';
 import { RawRepo } from './repo/rawRepo.js';
 import { DomainRepo } from './repo/domainRepo.js';
 import { ErrorRepo } from './repo/errorRepo.js';
+import { LocationRepo } from './repo/locationRepo.js';
 import { defaultRegistry } from './parsers/registry.js';
 import { ProjectionService } from './service/projectionService.js';
+import { LocationProjector } from './service/locationProjector.js';
 import { MessageProcessor } from './service/messageProcessor.js';
 import { MqttSubscriber } from './ingest/MqttSubscriber.js';
 import { systemClock } from './types.js';
@@ -20,7 +22,8 @@ async function main(): Promise<void> {
   const rawRepo = new RawRepo(pool);
   const errorRepo = new ErrorRepo(pool);
   const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo);
-  const processor = new MessageProcessor(deviceRepo, rawRepo, projection, errorRepo, systemClock);
+  const location = new LocationProjector(new LocationRepo(pool), errorRepo);
+  const processor = new MessageProcessor(deviceRepo, rawRepo, projection, location, errorRepo, systemClock);
 
   const subscriber = new MqttSubscriber(
     { brokerUrl: cfg.mqttUrl, topic: cfg.mqttTopic, clientId: cfg.mqttClientId, qos: cfg.qos },
