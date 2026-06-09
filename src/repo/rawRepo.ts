@@ -2,8 +2,8 @@ import type { Pool } from 'pg';
 import type { Header } from '../header.js';
 
 export interface RawInsert {
-  messageId: string;
-  deviceId: string | null;
+  messageKey: string;            // 멱등 키 (에이전트 결정적 생성)
+  deviceId: string | null;       // imei 조회 결과 (BIGINT 문자열) 또는 null
   header: Header;
   rawPayload: unknown;
   status: string;
@@ -13,21 +13,23 @@ export interface RawInsert {
 export class RawRepo {
   constructor(private readonly pool: Pool) {}
 
-  /** 원본 멱등 적재. 신규면 true, 중복(message_id 충돌)이면 false. */
-  async insert(r: RawInsert): Promise<boolean> {
-    const res = await this.pool.query(
+  /**
+   * 원본 멱등 적재. 신규면 생성된 message_id(BIGINT 문자열), 중복(message_key 충돌)이면 null.
+   */
+  async insert(r: RawInsert): Promise<string | null> {
+    const res = await this.pool.query<{ message_id: string }>(
       `INSERT INTO messages_raw
-         (message_id, device_id, message_code, process_dttm, latitude, longitude, raw_payload, status, received_at)
+         (message_key, device_id, message_code, process_dttm, latitude, longitude, raw_payload, status, received_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (message_id) DO NOTHING
+       ON CONFLICT (message_key) DO NOTHING
        RETURNING message_id`,
       [
-        r.messageId, r.deviceId, r.header.messageCode,
+        r.messageKey, r.deviceId, r.header.messageCode,
         r.header.processDttm, r.header.latitude, r.header.longitude,
         JSON.stringify(r.rawPayload), r.status, r.receivedAt,
       ],
     );
-    return (res.rowCount ?? 0) > 0;
+    return res.rows[0]?.message_id ?? null;
   }
 
   /** status 전이 (received | parsed | parse_error | unregistered_device). */
