@@ -7,8 +7,10 @@ import { DeviceRepo } from '../repo/deviceRepo.js';
 import { RawRepo } from '../repo/rawRepo.js';
 import { DomainRepo } from '../repo/domainRepo.js';
 import { ErrorRepo } from '../repo/errorRepo.js';
+import { LocationRepo } from '../repo/locationRepo.js';
 import { defaultRegistry } from '../parsers/registry.js';
 import { ProjectionService } from './projectionService.js';
+import { LocationProjector } from './locationProjector.js';
 import { MessageProcessor } from './messageProcessor.js';
 
 let container: StartedPostgreSqlContainer;
@@ -28,7 +30,8 @@ beforeAll(async () => {
   const rawRepo = new RawRepo(pool);
   const errorRepo = new ErrorRepo(pool);
   const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo);
-  proc = new MessageProcessor(deviceRepo, rawRepo, projection, errorRepo, clock);
+  const location = new LocationProjector(new LocationRepo(pool), errorRepo);
+  proc = new MessageProcessor(deviceRepo, rawRepo, projection, location, errorRepo, clock);
 });
 
 afterAll(async () => {
@@ -42,8 +45,11 @@ describe('MessageProcessor', () => {
     const raw = await pool.query('SELECT message_id, device_id, status FROM messages_raw');
     const row = raw.rows.find((r) => r.device_id === 'DEV-1');
     expect(row.status).toBe('parsed');
-    const dom = await pool.query('SELECT pcode FROM domain_fault WHERE message_id=$1', [row.message_id]);
+    const dom = await pool.query('SELECT pcode, device_id FROM domain_fault WHERE message_id=$1', [row.message_id]);
     expect(dom.rows[0].pcode).toBe('P0001');
+    expect(dom.rows[0].device_id).toBe('DEV-1');
+    const loc = await pool.query('SELECT device_id FROM domain_location WHERE message_id=$1', [row.message_id]);
+    expect(loc.rows[0].device_id).toBe('DEV-1');
   });
 
   it('중복은 한 번만 저장(멱등)', async () => {
@@ -58,6 +64,8 @@ describe('MessageProcessor', () => {
     expect(raw.rows[0].device_id).toBeNull();
     const e = await pool.query('SELECT stage FROM error_log WHERE message_id=$1', [raw.rows[0].message_id]);
     expect(e.rows[0].stage).toBe('device_lookup');
+    const loc = await pool.query('SELECT 1 FROM domain_location WHERE message_id=$1', [raw.rows[0].message_id]);
+    expect(loc.rowCount).toBe(0); // 미등록은 위치 저장 안 함
   });
 
   it('JSON 파싱 실패 → error_log(ingest), 원본 미저장', async () => {

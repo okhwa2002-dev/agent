@@ -2,6 +2,7 @@ import type { DeviceRepo } from '../repo/deviceRepo.js';
 import type { RawRepo } from '../repo/rawRepo.js';
 import type { ErrorRepo } from '../repo/errorRepo.js';
 import type { ProjectionService } from './projectionService.js';
+import type { LocationProjector } from './locationProjector.js';
 import type { Clock } from '../types.js';
 import { extractHeader } from '../header.js';
 import { deriveMessageId } from '../ingest/messageId.js';
@@ -12,6 +13,7 @@ export class MessageProcessor {
     private readonly deviceRepo: DeviceRepo,
     private readonly rawRepo: RawRepo,
     private readonly projection: ProjectionService,
+    private readonly location: LocationProjector,
     private readonly errorRepo: ErrorRepo,
     private readonly clock: Clock,
   ) {}
@@ -49,6 +51,8 @@ export class MessageProcessor {
       return;
     }
 
-    await this.projection.project(messageId, header.messageCode, payload);
+    // 등록 단말: 공통 위치 + messageCode 업무 파생
+    await this.location.project(messageId, deviceId, header);
+    await this.projection.project(messageId, deviceId, header.messageCode, payload);
   }
 }
