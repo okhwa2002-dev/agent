@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 
-export type ErrorStage = 'ingest' | 'device_lookup' | 'projection';
+export type ErrorStage = 'ingest' | 'device_lookup' | 'projection' | 'location';
 
 export interface ErrorEntry {
   messageId: string | null;
