@@ -1,4 +1,4 @@
-import type Redis from 'ioredis';
+import type { Redis } from 'ioredis';
 import type { MessageQueue, ClaimedRecord } from './MessageQueue.js';
 import type { ServerRecord } from '../types.js';
 

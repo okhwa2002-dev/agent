@@ -4,7 +4,7 @@ import type { RawMessage } from '../types.js';
 
 describe('handleMessage', () => {
   it('유효한 JSON을 RawMessage로 변환해 onMessage를 호출한다', async () => {
-    const onMessage = vi.fn<[RawMessage], Promise<void>>().mockResolvedValue(undefined);
+    const onMessage = vi.fn<(msg: RawMessage) => Promise<void>>().mockResolvedValue(undefined);
     const clock = { now: () => new Date('2026-06-09T09:03:00.000Z') };
     await handleMessage('device/dev-1/msg', Buffer.from('{"messageCode":"Fault"}'), onMessage, clock);
     const msg = onMessage.mock.calls[0][0];

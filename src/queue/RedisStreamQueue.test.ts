@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { RedisStreamQueue } from './RedisStreamQueue.js';
 import type { ServerRecord } from '../types.js';
 
