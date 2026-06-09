@@ -22,7 +22,7 @@
 | 처리 범위 | 원본 적재 + imei→device_id 조회 + 업무별 파생 저장 (모두 에이전트가 수행) |
 | 업무 타입 라우팅 | JSON 페이로드 내 `messageCode` 필드 |
 | 단말 관리 | 단말 마스터(`devices`) PK=`device_id` ↔ `imei`(UNIQUE) |
-| 매핑 키 | `message_id` = 원본·업무·에러 테이블을 잇는 메시지 단위 키 |
+| 매핑 키 | `message_id`(숫자 surrogate PK) = 원본·업무·에러 테이블을 잇는 키. `message_key`(TEXT UNIQUE) = 멱등 판정 키 |
 | 오류 기록 | 전용 단일 에러 테이블(`error_log`), 단계(stage)별 기록 |
 
 ### 1.2 설계 원칙
@@ -38,7 +38,7 @@
 Redis 버퍼가 없으므로 **PG의 `messages_raw` INSERT가 단일 내구성 지점**이다.
 
 - 수신 → 원본 INSERT 성공 → **그때 MQTT ack**. INSERT 실패(PG 다운 등) → ack 안 함 → Mosquitto가 QoS1으로 재전송.
-- `message_id` UNIQUE + `ON CONFLICT DO NOTHING` → 재전송으로 인한 중복은 자동 흡수.
+- `message_key` UNIQUE + `ON CONFLICT (message_key) DO NOTHING` → 재전송으로 인한 중복은 자동 흡수.
 - 원본 저장(=ack) **이후** 단계(단말 조회·업무 파생)의 실패는 재전송을 유발하지 않는다. 원본은 이미 보존되어 있고 `error_log` + `status`로 격리되어 별도 재처리한다(poison message 무한 재전송 방지).
 
 ## 2. 아키텍처 & 데이터 흐름
@@ -68,7 +68,7 @@ Redis 버퍼가 없으므로 **PG의 `messages_raw` INSERT가 단일 내구성 �
 
 ### 2.2 무손실-무중복 완결
 
-MQTT QoS 1(수신 보장) + 원본 INSERT 후 ack(내구성) + `message_id` UNIQUE(멱등) 조합으로 단말→DB 전 구간 at-least-once + 무중복이 성립한다.
+MQTT QoS 1(수신 보장) + 원본 INSERT 후 ack(내구성) + `message_key` UNIQUE(멱등) 조합으로 단말→DB 전 구간 at-least-once + 무중복이 성립한다.
 
 ## 3. 에이전트 컴포넌트 분해
 
@@ -104,7 +104,7 @@ src/
 | 컴포넌트 | 책임 |
 |---|---|
 | MqttSubscriber | MQTT 구독, manual ack 제어, 자동 재연결. 처리 콜백 위임 |
-| messageId | 결정적 멱등 키 유도(단말 고유 ID 우선, 없으면 deviceId+rawText 해시) |
+| messageId | 결정적 멱등 키(message_key) 유도(단말 고유 ID 우선, 없으면 deviceId+rawText 해시) |
 | header | rawPayload에서 공통 헤더(imei/messageCode/process_dttm/lat/lon) 추출 |
 | DeviceRepo | imei → device_id 조회, 단말 등록 |
 | RawRepo | messages_raw 멱등 INSERT, status 전이 |
@@ -130,7 +130,7 @@ src/
   └ 성공
      → messageId 부여 + extractHeader
      → imei로 device_id 조회
-     → messages_raw INSERT (device_id 포함, ON CONFLICT DO NOTHING)   [내구성 지점]
+     → messages_raw INSERT (device_id 포함, ON CONFLICT (message_key) DO NOTHING)   [내구성 지점]
         ├ INSERT 실패(PG 다운) → ack 안 함 → broker 재전송
         ├ 중복 → ack 후 종료 (이미 처리됨)
         └ 신규 → ★ MQTT ack ★
@@ -164,67 +164,61 @@ src/
 > 모든 테이블은 생성일시 컬럼 `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`을 가진다. 실제 `schema.sql`에는 각 테이블 정의 아래에 `COMMENT ON TABLE/COLUMN` 코멘트가 정리되어 있다(아래는 구조 요약).
 
 ```sql
--- 단말 마스터 — device_id ↔ imei
+-- 단말 마스터 — device_id(숫자 PK) ↔ imei(자연키)
 CREATE TABLE devices (
-  device_id   TEXT PRIMARY KEY,
+  device_id   BIGSERIAL PRIMARY KEY,
   imei        TEXT NOT NULL UNIQUE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()   -- 생성일시
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 원본 적재 (bronze, 불변) — 원본 JSON + 공통 헤더
+-- 원본 적재 (bronze, 불변) — 숫자 PK(message_id) + 멱등 키(message_key)
 CREATE TABLE messages_raw (
-  message_id    TEXT PRIMARY KEY,           -- 멱등 판정 키 = 전 계층 매핑 키
-  device_id     TEXT REFERENCES devices(device_id),  -- imei 조회 결과. 미등록 시 NULL
+  message_id    BIGSERIAL PRIMARY KEY,      -- 숫자 surrogate PK = 전 계층 매핑 키
+  message_key   TEXT NOT NULL UNIQUE,       -- 멱등 키(에이전트 결정적 생성) = 재전송 중복 흡수
+  device_id     BIGINT REFERENCES devices(device_id),  -- imei 조회 결과. 미등록 시 NULL
   message_code  TEXT NOT NULL,
   process_dttm  TIMESTAMPTZ,
   latitude      NUMERIC,
   longitude     NUMERIC,
   raw_payload   JSONB NOT NULL,             -- 단말 원본 JSON 무변형
   status        TEXT NOT NULL DEFAULT 'received',  -- received | parsed | parse_error | unregistered_device
-  received_at   TIMESTAMPTZ NOT NULL,       -- 에이전트 수신 시각
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()  -- 생성일시(DB 적재)
+  received_at   TIMESTAMPTZ NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_raw_status ON messages_raw (status) WHERE status <> 'parsed';
-CREATE INDEX idx_raw_code   ON messages_raw (message_code, received_at);
-CREATE INDEX idx_raw_device ON messages_raw (device_id, received_at);
 
--- 업무 도메인 테이블 (silver, 파생). 각 업무단은 device_id를 보유(단말별 조회 용이).
--- messageCode = "Fault"
+-- 업무 도메인 테이블 (silver, 파생). 각 업무단은 자체 시퀀스 id + message_id 참조 + device_id 보유.
 CREATE TABLE domain_fault (
-  message_id   TEXT PRIMARY KEY REFERENCES messages_raw(message_id),
-  device_id    TEXT NOT NULL REFERENCES devices(device_id),  -- 업무단 단말 식별
-  ftp          TEXT,
-  sp           TEXT,
-  pcode        TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()  -- 생성일시
+  id           BIGSERIAL PRIMARY KEY,                              -- 업무단 자체 시퀀스
+  message_id   BIGINT NOT NULL UNIQUE REFERENCES messages_raw(message_id),  -- 원본 참조(UNIQUE, 멱등)
+  device_id    BIGINT NOT NULL REFERENCES devices(device_id),
+  ftp TEXT, sp TEXT, pcode TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_fault_device ON domain_fault (device_id);
 
--- 공통 위치 (모든 등록 단말 메시지에서 분리). messageCode 무관.
 CREATE TABLE domain_location (
-  message_id   TEXT PRIMARY KEY REFERENCES messages_raw(message_id),
-  device_id    TEXT NOT NULL REFERENCES devices(device_id),
-  latitude     NUMERIC,
-  longitude    NUMERIC,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()  -- 생성일시
+  id           BIGSERIAL PRIMARY KEY,
+  message_id   BIGINT NOT NULL UNIQUE REFERENCES messages_raw(message_id),
+  device_id    BIGINT NOT NULL REFERENCES devices(device_id),
+  latitude NUMERIC, longitude NUMERIC,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_location_device ON domain_location (device_id);
--- domain_<다른업무코드> ... 동일 패턴 (message_id PK + device_id NOT NULL).
+-- domain_<다른업무코드> ... 동일 패턴 (자체 id PK + message_id UNIQUE FK + device_id NOT NULL).
 
 -- 전용 에러 테이블 — 단계별 오류 추적
 CREATE TABLE error_log (
   id           BIGSERIAL PRIMARY KEY,
-  message_id   TEXT,                        -- 추적 키 (messages_raw와 매핑, FK 아님: 원본 저장 전 오류도 기록)
+  message_id   BIGINT,                      -- 원본 참조(원본 저장 전 오류면 NULL)
+  message_key  TEXT,                        -- 멱등 키(있을 때)
   stage        TEXT NOT NULL,               -- ingest | device_lookup | projection | location
   message_code TEXT,
   imei         TEXT,
-  detail       TEXT NOT NULL,               -- 오류 내용
-  raw_text     TEXT,                        -- 원본 텍스트 (파싱 실패 시 보존)
+  detail       TEXT NOT NULL,
+  raw_text     TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_error_message ON error_log (message_id);
-CREATE INDEX idx_error_stage   ON error_log (stage, created_at);
 ```
+
+> 전체 DDL과 컬럼 코멘트(`COMMENT ON ...`), 인덱스는 [src/db/schema.sql](../../../src/db/schema.sql) 참조. 모든 테이블에 `created_at`(생성일시) 보유.
 
 **추적 조회 예시 (원본 + 업무 + 단말 + 에러):**
 ```sql
@@ -251,7 +245,7 @@ WHERE r.message_id = $1;
 | Mosquitto 연결 끊김 | 자동 재연결(백오프), QoS1이라 broker가 미전달 보관 | ✅ |
 | JSON 파싱 실패 | error_log(stage=ingest, raw_text) 기록 후 ack (재전송 무의미) | ✅ (원본 보존) |
 | messages_raw INSERT 실패(PG 다운) | ack 안 함 → broker 재전송 | ✅ |
-| 중복 message_id | ON CONFLICT로 흡수, ack | ✅ (무중복) |
+| 중복(message_key) | ON CONFLICT (message_key)로 흡수, ack | ✅ (무중복) |
 | 미등록 imei | 원본 저장됨. status=unregistered_device + error_log(device_lookup). **도메인·위치 저장 안 함**. 단말 등록 후 재처리 | ✅ (원본 보존) |
 | 미등록 코드/파싱 실패 | 원본 저장됨. status=parse_error + error_log(projection). 파서 수정 후 재처리 | ✅ (원본 보존) |
 | 위치 저장 실패 | 원본 저장됨. error_log(location). 비치명(파서 projection은 계속) | ✅ (원본 보존) |

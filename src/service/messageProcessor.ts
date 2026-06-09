@@ -18,7 +18,6 @@ export class MessageProcessor {
     private readonly clock: Clock,
   ) {}
 
-  /** @param topic MQTT 토픽, @param rawBuffer 페이로드 바이트 */
   async handle(topic: string, rawBuffer: Buffer): Promise<void> {
     const rawText = rawBuffer.toString('utf8');
     let payload: unknown;
@@ -26,28 +25,28 @@ export class MessageProcessor {
       payload = JSON.parse(rawText);
     } catch {
       // 파싱 불가 — 재전송 무의미. error_log에 보존하고 ack.
-      await this.errorRepo.log({ messageId: null, stage: 'ingest', detail: 'json parse failed', rawText });
+      await this.errorRepo.log({ stage: 'ingest', detail: 'json parse failed', rawText });
       return;
     }
 
     const deviceIdFromTopic = topic.split('/')[1] ?? 'unknown';
     const header = extractHeader(payload);
-    const messageId = deriveMessageId(deviceIdFromTopic, payload, rawText);
+    const messageKey = deriveMessageId(deviceIdFromTopic, payload, rawText);
 
-    // 단말 조회 (PG 오류면 throw → 재전송)
+    // imei로 device_id 조회 (PG 오류면 throw → 재전송)
     const deviceId = await this.deviceRepo.findDeviceIdByImei(header.imei);
     const status = deviceId ? 'received' : 'unregistered_device';
 
-    // 원본 적재 (내구성 지점). PG 오류면 throw → 재전송
-    const isNew = await this.rawRepo.insert({
-      messageId, deviceId, header, rawPayload: payload, status,
+    // 원본 적재 (내구성 지점). 신규면 message_id 반환, 중복(message_key)이면 null.
+    const messageId = await this.rawRepo.insert({
+      messageKey, deviceId, header, rawPayload: payload, status,
       receivedAt: this.clock.now().toISOString(),
     });
-    if (!isNew) return; // 중복 → ack
+    if (messageId == null) return; // 중복 → ack
 
     if (!deviceId) {
-      // 미등록 단말: 원본 보존, 파생 보류, 추적 기록
-      await this.errorRepo.log({ messageId, stage: 'device_lookup', imei: header.imei, messageCode: header.messageCode, detail: `unregistered imei: ${header.imei}` });
+      // 미등록 단말: 원본만 보존, 도메인/위치 저장 안 함, 추적 기록
+      await this.errorRepo.log({ messageId, messageKey, stage: 'device_lookup', imei: header.imei, messageCode: header.messageCode, detail: `unregistered imei: ${header.imei}` });
       return;
     }
 

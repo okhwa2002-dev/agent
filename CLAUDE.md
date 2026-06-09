@@ -56,7 +56,7 @@
 ### 핵심 규칙
 
 - **무손실(at-least-once):** `messages_raw` INSERT가 단일 내구성 지점이다. INSERT 성공 후에만 MQTT puback(ack)을 보낸다. PG 장애 시 ack하지 않아 broker가 재전송한다.
-- **무중복(멱등):** `message_id`가 모든 테이블의 PK/UNIQUE이며 `ON CONFLICT DO NOTHING`으로 재전송 중복을 흡수한다. `message_id`는 결정적으로 유도된다(단말 고유 ID 우선, 없으면 `deviceId + 원본텍스트`의 sha256).
+- **무중복(멱등):** `messages_raw.message_key`(TEXT UNIQUE)가 멱등 키이며 `ON CONFLICT (message_key) DO NOTHING`으로 재전송 중복을 흡수한다. `message_key`는 결정적으로 유도된다(단말 고유 ID 우선, 없으면 `deviceId + 원본텍스트`의 sha256). `message_id`는 BIGSERIAL 숫자 PK로, 도메인/에러 테이블이 참조한다.
 - **원본이 진실의 원천:** 어떤 단계가 실패해도 `messages_raw` 원본은 항상 보존된다. 파서 수정·단말 등록 후 원본을 재처리하면 복구된다(단말 재수집 불필요).
 - **ack 이후 단계는 비치명:** 원본 저장(=ack) 다음의 위치/업무 파생 실패는 재전송을 유발하지 않고 `error_log` + `status`로 격리한다(poison message 무한 재전송 방지).
 - **단계별 추적:** 모든 오류는 `error_log`에 `message_id` + `stage`로 기록되어 원본·업무·에러를 한 키로 추적한다.
@@ -69,11 +69,11 @@
 
 | 테이블 | 역할 | 키 |
 |---|---|---|
-| `devices` | 단말 마스터. `device_id` ↔ `imei` 매핑 | PK `device_id`, UNIQUE `imei` |
-| `messages_raw` | 원본 적재(불변, bronze). 원본 JSON + 공통 헤더 | PK `message_id`, FK `device_id` |
-| `domain_fault` | 업무(고장) 파생. `message.{ftp,sp,pcode}` | PK/FK `message_id`, `device_id` |
-| `domain_location` | 공통 위치 파생(messageCode 무관, 등록 단말) | PK/FK `message_id`, `device_id` |
-| `error_log` | 단계별 오류 추적 | `message_id`(추적), `stage` |
+| `devices` | 단말 마스터. `device_id` ↔ `imei` 매핑 | PK `device_id`(BIGSERIAL), UNIQUE `imei` |
+| `messages_raw` | 원본 적재(불변, bronze). 원본 JSON + 공통 헤더 | PK `message_id`(BIGSERIAL), UNIQUE `message_key`(멱등), FK `device_id` |
+| `domain_fault` | 업무(고장) 파생. `message.{ftp,sp,pcode}` | PK `id`, UNIQUE FK `message_id`, `device_id` |
+| `domain_location` | 공통 위치 파생(messageCode 무관, 등록 단말) | PK `id`, UNIQUE FK `message_id`, `device_id` |
+| `error_log` | 단계별 오류 추적 | PK `id`, 참조 `message_id`/`message_key`, `stage` |
 
 - 모든 테이블은 생성일시 `created_at TIMESTAMPTZ NOT NULL DEFAULT now()` 보유.
 - 각 업무 도메인 테이블은 단말별 조회를 위해 `device_id NOT NULL`을 가진다.
@@ -167,14 +167,14 @@ DATABASE_URL=postgres://postgres:pw@localhost:5432/agent \
 
 - **TDD:** 실패 테스트 → 최소 구현 → 통과 → 커밋. 단위(순수 함수) + 통합(testcontainers PG).
 - **커밋:** 태스크 단위 원자적 커밋. `feat:` / `refactor:` / `chore:` / `docs:` 접두사. 기능 브랜치 작업 후 `--no-ff`로 main 병합.
-- **무손실/멱등 불변식 유지:** 원본 INSERT 성공 후에만 ack, 모든 테이블 `message_id` 멱등.
+- **무손실/멱등 불변식 유지:** 원본 INSERT 성공 후에만 ack, `message_key` UNIQUE로 멱등.
 - **순수 함수 격리:** 파서/헤더 추출 등 변환 로직에 I/O를 두지 않는다(테스트 용이성).
 
 ### 새 업무(messageCode) 추가 절차 — 개방-폐쇄
 
 기존 코드를 수정하지 않고 **추가만** 한다:
 
-1. **테이블:** `src/db/schema.sql`에 `domain_<code>` 추가 (`message_id` PK/FK, `device_id NOT NULL`, 업무 컬럼, `created_at`, 코멘트).
+1. **테이블:** `src/db/schema.sql`에 `domain_<code>` 추가 (`id BIGSERIAL PK`, `message_id BIGINT UNIQUE FK`, `device_id BIGINT NOT NULL`, 업무 컬럼, `created_at`, 코멘트).
 2. **Repo:** 해당 테이블 INSERT 메서드 (`domainRepo`에 추가 또는 전용 repo).
 3. **파서:** `src/parsers/<code>Parser.ts`에 `DomainParser` 구현 (`parse`는 순수, `insert(repo, messageId, deviceId, parsed)`).
 4. **등록:** `src/parsers/registry.ts`의 `defaultRegistry()`에 파서 추가.

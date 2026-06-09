@@ -14,36 +14,38 @@ let container: StartedPostgreSqlContainer;
 let pool: Pool;
 let proj: LocationProjector;
 let rawRepo: RawRepo;
+let deviceId: string;
 
 const base: Header = { imei: 'i', messageCode: 'Fault', processDttm: null, latitude: '19.2', longitude: '203.1' };
+
+async function seed(messageKey: string): Promise<string> {
+  const id = await rawRepo.insert({ messageKey, deviceId, header: base, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
+  return id!;
+}
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer('postgres:16-alpine').start();
   pool = createPool(container.getConnectionUri());
   await applySchema(pool);
-  await new DeviceRepo(pool).register('DEV-1', 'imei-loc');
+  deviceId = await new DeviceRepo(pool).register('imei-loc');
   rawRepo = new RawRepo(pool);
   proj = new LocationProjector(new LocationRepo(pool), new ErrorRepo(pool));
 });
 
 afterAll(async () => { await pool.end(); await container.stop(); });
 
-async function seed(id: string): Promise<void> {
-  await rawRepo.insert({ messageId: id, deviceId: 'DEV-1', header: base, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
-}
-
 describe('LocationProjector', () => {
   it('lat/lon 있으면 domain_location에 저장', async () => {
-    await seed('loc-1');
-    await proj.project('loc-1', 'DEV-1', base);
-    const r = await pool.query('SELECT latitude, device_id FROM domain_location WHERE message_id=$1', ['loc-1']);
-    expect(r.rows[0].device_id).toBe('DEV-1');
+    const mid = await seed('lk-1');
+    await proj.project(mid, deviceId, base);
+    const r = await pool.query('SELECT latitude, device_id FROM domain_location WHERE message_id=$1', [mid]);
+    expect(r.rows[0].device_id).toBe(deviceId);
   });
 
   it('lat/lon 없으면 스킵(저장 안 함)', async () => {
-    await seed('loc-2');
-    await proj.project('loc-2', 'DEV-1', { ...base, latitude: null, longitude: null });
-    const r = await pool.query('SELECT 1 FROM domain_location WHERE message_id=$1', ['loc-2']);
+    const mid = await seed('lk-2');
+    await proj.project(mid, deviceId, { ...base, latitude: null, longitude: null });
+    const r = await pool.query('SELECT 1 FROM domain_location WHERE message_id=$1', [mid]);
     expect(r.rowCount).toBe(0);
   });
 });
