@@ -7,6 +7,7 @@ import { DeviceRepo } from './deviceRepo.js';
 import { RawRepo } from './rawRepo.js';
 import { DomainRepo } from './domainRepo.js';
 import { ErrorRepo } from './errorRepo.js';
+import { LocationRepo } from './locationRepo.js';
 import type { Header } from '../header.js';
 
 let container: StartedPostgreSqlContainer;
@@ -50,8 +51,8 @@ describe('repositories', () => {
     const raw = new RawRepo(pool);
     await raw.insert({ messageId: 'raw-2', deviceId: 'DEV-100', header, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
     const repo = new DomainRepo(pool);
-    await repo.insertFault('raw-2', { ftp: '100', sp: '12', pcode: 'P0001' });
-    await repo.insertFault('raw-2', { ftp: '100', sp: '12', pcode: 'P0001' });
+    await repo.insertFault('raw-2', 'DEV-100', { ftp: '100', sp: '12', pcode: 'P0001' });
+    await repo.insertFault('raw-2', 'DEV-100', { ftp: '100', sp: '12', pcode: 'P0001' });
     const res = await pool.query('SELECT ftp FROM domain_fault WHERE message_id = $1', ['raw-2']);
     expect(res.rows[0].ftp).toBe('100');
   });
@@ -61,5 +62,15 @@ describe('repositories', () => {
     await repo.log({ messageId: 'raw-1', stage: 'projection', messageCode: 'Fault', detail: 'boom' });
     const res = await pool.query('SELECT stage, detail FROM error_log WHERE message_id = $1', ['raw-1']);
     expect(res.rows[0]).toMatchObject({ stage: 'projection', detail: 'boom' });
+  });
+
+  it('locationRepo: 위치 멱등 INSERT', async () => {
+    const raw = new RawRepo(pool);
+    await raw.insert({ messageId: 'raw-3', deviceId: 'DEV-100', header, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
+    const repo = new LocationRepo(pool);
+    await repo.insert('raw-3', 'DEV-100', '19.2', '203.1');
+    await repo.insert('raw-3', 'DEV-100', '19.2', '203.1');
+    const res = await pool.query('SELECT latitude, device_id FROM domain_location WHERE message_id=$1', ['raw-3']);
+    expect(res.rows[0].device_id).toBe('DEV-100');
   });
 });
