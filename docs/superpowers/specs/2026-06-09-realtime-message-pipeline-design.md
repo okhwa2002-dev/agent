@@ -161,12 +161,14 @@ src/
 }
 ```
 
+> 모든 테이블은 생성일시 컬럼 `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`을 가진다. 실제 `schema.sql`에는 각 테이블 정의 아래에 `COMMENT ON TABLE/COLUMN` 코멘트가 정리되어 있다(아래는 구조 요약).
+
 ```sql
 -- 단말 마스터 — device_id ↔ imei
 CREATE TABLE devices (
-  device_id     TEXT PRIMARY KEY,
-  imei          TEXT NOT NULL UNIQUE,
-  registered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  device_id   TEXT PRIMARY KEY,
+  imei        TEXT NOT NULL UNIQUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()   -- 생성일시
 );
 
 -- 원본 적재 (bronze, 불변) — 원본 JSON + 공통 헤더
@@ -179,8 +181,8 @@ CREATE TABLE messages_raw (
   longitude     NUMERIC,
   raw_payload   JSONB NOT NULL,             -- 단말 원본 JSON 무변형
   status        TEXT NOT NULL DEFAULT 'received',  -- received | parsed | parse_error | unregistered_device
-  received_at   TIMESTAMPTZ NOT NULL,
-  stored_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  received_at   TIMESTAMPTZ NOT NULL,       -- 에이전트 수신 시각
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()  -- 생성일시(DB 적재)
 );
 CREATE INDEX idx_raw_status ON messages_raw (status) WHERE status <> 'parsed';
 CREATE INDEX idx_raw_code   ON messages_raw (message_code, received_at);
@@ -193,7 +195,8 @@ CREATE TABLE domain_fault (
   device_id    TEXT NOT NULL REFERENCES devices(device_id),  -- 업무단 단말 식별
   ftp          TEXT,
   sp           TEXT,
-  pcode        TEXT
+  pcode        TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()  -- 생성일시
 );
 CREATE INDEX idx_fault_device ON domain_fault (device_id);
 
@@ -202,7 +205,8 @@ CREATE TABLE domain_location (
   message_id   TEXT PRIMARY KEY REFERENCES messages_raw(message_id),
   device_id    TEXT NOT NULL REFERENCES devices(device_id),
   latitude     NUMERIC,
-  longitude    NUMERIC
+  longitude    NUMERIC,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()  -- 생성일시
 );
 CREATE INDEX idx_location_device ON domain_location (device_id);
 -- domain_<다른업무코드> ... 동일 패턴 (message_id PK + device_id NOT NULL).
