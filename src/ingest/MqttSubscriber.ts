@@ -1,66 +1,50 @@
 import mqtt, { type MqttClient } from 'mqtt';
-import type { RawMessage, Clock } from '../types.js';
-import { systemClock } from '../types.js';
+import type { IPublishPacket } from 'mqtt-packet';
 
-export type OnMessage = (msg: RawMessage) => Promise<void>;
-
-/** 토픽 device/<deviceId>/... 에서 deviceId 추출 */
-function extractDeviceId(topic: string): string {
-  return topic.split('/')[1] ?? 'unknown';
-}
-
-/**
- * 수신 메시지 1건 처리(순수 로직, 테스트 대상).
- * @returns 정상 처리 true / 파싱 실패 false
- */
-export async function handleMessage(
-  topic: string, raw: Buffer, onMessage: OnMessage, clock: Clock,
-): Promise<boolean> {
-  const rawText = raw.toString('utf8');
-  let payload: unknown;
-  try {
-    payload = JSON.parse(rawText);
-  } catch {
-    return false; // 파싱 불가 → 호출자가 별도 처리(로그/격리)
-  }
-  await onMessage({
-    topic,
-    deviceId: extractDeviceId(topic),
-    payload,
-    rawText,
-    receivedAt: clock.now().toISOString(),
-  });
-  return true;
-}
+/** 메시지 처리기: 정상 반환=ack, throw=ack 안 함(재전송 유도). */
+export type Handler = (topic: string, payload: Buffer) => Promise<void>;
 
 export interface MqttSubscriberOptions {
   brokerUrl: string;
   topic: string;
+  clientId: string;
   qos: 0 | 1 | 2;
 }
 
-/** Mosquitto 구독. 수신 시 handleMessage로 위임. QoS 1로 at-least-once. */
+/**
+ * Mosquitto 구독. handleMessage 오버라이드로 QoS1 puback을 처리 성공 후에만 전송한다.
+ * clean:false + 안정 clientId로 미ack 메시지 재전송 보장.
+ */
 export class MqttSubscriber {
   private client?: MqttClient;
   constructor(
     private readonly opts: MqttSubscriberOptions,
-    private readonly onMessage: OnMessage,
-    private readonly clock: Clock = systemClock,
+    private readonly handler: Handler,
   ) {}
 
   async start(): Promise<void> {
-    this.client = mqtt.connect(this.opts.brokerUrl, { reconnectPeriod: 2000 });
+    const client = mqtt.connect(this.opts.brokerUrl, {
+      clientId: this.opts.clientId,
+      clean: false,            // durable session — 미ack QoS1 재전송
+      reconnectPeriod: 2000,
+    });
+    this.client = client;
+
+    // 처리 성공 후 cb() → puback 전송. 실패 시 cb(err) → puback 안 함 → 재전송.
+    client.handleMessage = (packet: IPublishPacket, cb: (err?: Error) => void): void => {
+      this.handler(packet.topic, packet.payload as Buffer)
+        .then(() => cb())
+        .catch((err: unknown) => {
+          console.error(JSON.stringify({ level: 'error', msg: 'process failed (will redeliver)', err: String(err) }));
+          cb(err instanceof Error ? err : new Error(String(err)));
+        });
+    };
+
     await new Promise<void>((resolve, reject) => {
-      this.client!.once('connect', () => resolve());
-      this.client!.once('error', reject);
+      client.once('connect', () => resolve());
+      client.once('error', reject);
     });
-    await this.client.subscribeAsync(this.opts.topic, { qos: this.opts.qos });
-    this.client.on('message', (topic, payload) => {
-      // onMessage(enqueue) 성공 후에만 처리 완료 — 실패 시 throw되어 QoS1 재전송 유도
-      void handleMessage(topic, payload, this.onMessage, this.clock).catch((err) => {
-        console.error(JSON.stringify({ level: 'error', msg: 'ingest failed', err: String(err) }));
-      });
-    });
+    await client.subscribeAsync(this.opts.topic, { qos: this.opts.qos });
   }
 
   async stop(): Promise<void> {

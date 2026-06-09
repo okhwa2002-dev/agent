@@ -4,14 +4,14 @@ import { loadConfig } from './config.js';
 describe('loadConfig', () => {
   it('환경변수에서 설정을 로드한다', () => {
     const cfg = loadConfig({
-      AGENT_ID: 'edge-01', MQTT_URL: 'mqtt://localhost:1883', MQTT_TOPIC: 'device/+/msg',
-      REDIS_URL: 'redis://localhost:6379', SERVER_URL: 'http://localhost:3000',
+      DATABASE_URL: 'postgres://localhost/db', MQTT_URL: 'mqtt://localhost:1883', MQTT_TOPIC: 'device/+/msg',
     });
-    expect(cfg.agentId).toBe('edge-01');
-    expect(cfg.batchSize).toBeGreaterThan(0); // 기본값
+    expect(cfg.databaseUrl).toBe('postgres://localhost/db');
+    expect(cfg.qos).toBe(1);
+    expect(cfg.mqttClientId).toBe('edge-agent');
   });
 
-  it('필수 변수 누락 시 throw한다', () => {
-    expect(() => loadConfig({})).toThrow(/AGENT_ID/);
+  it('필수 변수 누락 시 throw', () => {
+    expect(() => loadConfig({})).toThrow(/DATABASE_URL/);
   });
 });

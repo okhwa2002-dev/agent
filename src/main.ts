@@ -1,2 +1,45 @@
-// 구현은 Task 8에서 조립한다. (임시 스텁 — 중간 단계 전체 컴파일 유지용)
-export {};
+import { loadConfig } from './config/config.js';
+import { createPool } from './db/pool.js';
+import { applySchema } from './db/applySchema.js';
+import { DeviceRepo } from './repo/deviceRepo.js';
+import { RawRepo } from './repo/rawRepo.js';
+import { DomainRepo } from './repo/domainRepo.js';
+import { ErrorRepo } from './repo/errorRepo.js';
+import { defaultRegistry } from './parsers/registry.js';
+import { ProjectionService } from './service/projectionService.js';
+import { MessageProcessor } from './service/messageProcessor.js';
+import { MqttSubscriber } from './ingest/MqttSubscriber.js';
+import { systemClock } from './types.js';
+
+async function main(): Promise<void> {
+  const cfg = loadConfig(process.env);
+  const pool = createPool(cfg.databaseUrl);
+  await applySchema(pool); // IF NOT EXISTS — 멱등
+
+  const deviceRepo = new DeviceRepo(pool);
+  const rawRepo = new RawRepo(pool);
+  const errorRepo = new ErrorRepo(pool);
+  const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo);
+  const processor = new MessageProcessor(deviceRepo, rawRepo, projection, errorRepo, systemClock);
+
+  const subscriber = new MqttSubscriber(
+    { brokerUrl: cfg.mqttUrl, topic: cfg.mqttTopic, clientId: cfg.mqttClientId, qos: cfg.qos },
+    (topic, payload) => processor.handle(topic, payload),
+  );
+  await subscriber.start();
+  console.log(JSON.stringify({ level: 'info', msg: 'agent started', clientId: cfg.mqttClientId }));
+
+  const shutdown = async () => {
+    await subscriber.stop();
+    await pool.end();
+    console.log(JSON.stringify({ level: 'info', msg: 'agent stopped' }));
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown());
+  process.on('SIGINT', () => void shutdown());
+}
+
+main().catch((err) => {
+  console.error(JSON.stringify({ level: 'fatal', err: String(err) }));
+  process.exit(1);
+});
