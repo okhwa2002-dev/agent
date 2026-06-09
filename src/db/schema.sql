@@ -22,10 +22,20 @@ CREATE INDEX IF NOT EXISTS idx_raw_device ON messages_raw (device_id, received_a
 
 CREATE TABLE IF NOT EXISTS domain_fault (
   message_id   TEXT PRIMARY KEY REFERENCES messages_raw(message_id),
+  device_id    TEXT NOT NULL REFERENCES devices(device_id),
   ftp          TEXT,
   sp           TEXT,
   pcode        TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_fault_device ON domain_fault (device_id);
+
+CREATE TABLE IF NOT EXISTS domain_location (
+  message_id   TEXT PRIMARY KEY REFERENCES messages_raw(message_id),
+  device_id    TEXT NOT NULL REFERENCES devices(device_id),
+  latitude     NUMERIC,
+  longitude    NUMERIC
+);
+CREATE INDEX IF NOT EXISTS idx_location_device ON domain_location (device_id);
 
 CREATE TABLE IF NOT EXISTS error_log (
   id           BIGSERIAL PRIMARY KEY,
