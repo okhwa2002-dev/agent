@@ -108,10 +108,12 @@ src/
 | header | rawPayload에서 공통 헤더(imei/messageCode/process_dttm/lat/lon) 추출 |
 | DeviceRepo | imei → device_id 조회, 단말 등록 |
 | RawRepo | messages_raw 멱등 INSERT, status 전이 |
-| DomainRepo | 업무 도메인 테이블 INSERT(멱등) |
+| DomainRepo | 업무 도메인 테이블 INSERT(멱등, device_id 포함) |
+| LocationRepo | domain_location INSERT(멱등, device_id 포함) |
 | ErrorRepo | error_log 기록 (stage, message_id, detail, raw_text) |
-| ParserRegistry / DomainParser | messageCode → 파서. 새 업무 = 파서+테이블 추가(개방-폐쇄) |
-| ProjectionService | raw → 도메인 파생, parse_error 격리 + 에러 기록 |
+| ParserRegistry / DomainParser | messageCode → 파서. `insert(repo, messageId, deviceId, parsed)`. 새 업무 = 파서+테이블 추가(개방-폐쇄) |
+| ProjectionService | raw → 도메인 파생(device_id 전파), parse_error 격리 + 에러 기록 |
+| LocationProjector | lat/lon 있으면 domain_location 저장(messageCode 무관, 등록 단말만) |
 | MessageProcessor | 수신 1건의 전 단계 오케스트레이션 + 단계별 에러 기록 + ack 신호 |
 
 ### 3.2 핵심 설계 포인트
@@ -127,16 +129,20 @@ src/
   ├ 실패 → error_log(stage=ingest, raw_text 보존) → ack (재전송 무의미)
   └ 성공
      → messageId 부여 + extractHeader
-     → messages_raw INSERT (ON CONFLICT DO NOTHING)   [내구성 지점]
+     → imei로 device_id 조회
+     → messages_raw INSERT (device_id 포함, ON CONFLICT DO NOTHING)   [내구성 지점]
         ├ INSERT 실패(PG 다운) → ack 안 함 → broker 재전송
         ├ 중복 → ack 후 종료 (이미 처리됨)
         └ 신규 → ★ MQTT ack ★
-     → imei로 device_id 조회
-        ├ 조회 성공 → device_id 채움
-        └ 미등록 → status='unregistered_device' + error_log(stage=device_lookup)
-     → messageCode로 파서 분기 → domain_* 저장
-        ├ 성공 → status='parsed'
-        └ 미등록 코드/실패 → status='parse_error' + error_log(stage=projection)
+     → 분기:
+        ├ device_id 없음(미등록) → status='unregistered_device' + error_log(stage=device_lookup)
+        │                          → 종료 (도메인·위치 저장 안 함, 원본만 보존)
+        └ device_id 있음 →
+             ├ 위치 projection: lat/lon 있으면 domain_location(device_id) 저장
+             │   └ 실패 → error_log(stage=location)
+             └ messageCode 파서 projection: domain_<code>(device_id) 저장
+                 ├ 성공 → status='parsed'
+                 └ 미등록 코드/실패 → status='parse_error' + error_log(stage=projection)
 ```
 
 **불변식:** 원본 저장(=ack) 이후 단계가 모두 실패해도 원본과 에러 기록은 남는다. PG 자체 장애만이 재전송을 유발하며, 그 경우에도 무손실이 유지된다.
@@ -180,20 +186,32 @@ CREATE INDEX idx_raw_status ON messages_raw (status) WHERE status <> 'parsed';
 CREATE INDEX idx_raw_code   ON messages_raw (message_code, received_at);
 CREATE INDEX idx_raw_device ON messages_raw (device_id, received_at);
 
--- 업무 도메인 테이블 (silver, 파생) — messageCode = "Fault"
+-- 업무 도메인 테이블 (silver, 파생). 각 업무단은 device_id를 보유(단말별 조회 용이).
+-- messageCode = "Fault"
 CREATE TABLE domain_fault (
   message_id   TEXT PRIMARY KEY REFERENCES messages_raw(message_id),
+  device_id    TEXT NOT NULL REFERENCES devices(device_id),  -- 업무단 단말 식별
   ftp          TEXT,
   sp           TEXT,
   pcode        TEXT
 );
--- domain_<다른업무코드> ... 동일 패턴. 공통 필드는 messages_raw에서 join.
+CREATE INDEX idx_fault_device ON domain_fault (device_id);
+
+-- 공통 위치 (모든 등록 단말 메시지에서 분리). messageCode 무관.
+CREATE TABLE domain_location (
+  message_id   TEXT PRIMARY KEY REFERENCES messages_raw(message_id),
+  device_id    TEXT NOT NULL REFERENCES devices(device_id),
+  latitude     NUMERIC,
+  longitude    NUMERIC
+);
+CREATE INDEX idx_location_device ON domain_location (device_id);
+-- domain_<다른업무코드> ... 동일 패턴 (message_id PK + device_id NOT NULL).
 
 -- 전용 에러 테이블 — 단계별 오류 추적
 CREATE TABLE error_log (
   id           BIGSERIAL PRIMARY KEY,
   message_id   TEXT,                        -- 추적 키 (messages_raw와 매핑, FK 아님: 원본 저장 전 오류도 기록)
-  stage        TEXT NOT NULL,               -- ingest | device_lookup | projection
+  stage        TEXT NOT NULL,               -- ingest | device_lookup | projection | location
   message_code TEXT,
   imei         TEXT,
   detail       TEXT NOT NULL,               -- 오류 내용
@@ -206,13 +224,15 @@ CREATE INDEX idx_error_stage   ON error_log (stage, created_at);
 
 **추적 조회 예시 (원본 + 업무 + 단말 + 에러):**
 ```sql
-SELECT d.imei, r.message_code, r.status, r.process_dttm,
+SELECT d.imei, r.device_id, r.message_code, r.status, r.process_dttm,
        f.ftp, f.sp, f.pcode,
+       l.latitude, l.longitude,
        e.stage AS error_stage, e.detail AS error_detail
 FROM messages_raw r
-LEFT JOIN devices      d USING (device_id)
-LEFT JOIN domain_fault f USING (message_id)
-LEFT JOIN error_log    e USING (message_id)
+LEFT JOIN devices         d USING (device_id)
+LEFT JOIN domain_fault    f USING (message_id)
+LEFT JOIN domain_location l USING (message_id)
+LEFT JOIN error_log       e USING (message_id)
 WHERE r.message_id = $1;
 ```
 
@@ -228,8 +248,9 @@ WHERE r.message_id = $1;
 | JSON 파싱 실패 | error_log(stage=ingest, raw_text) 기록 후 ack (재전송 무의미) | ✅ (원본 보존) |
 | messages_raw INSERT 실패(PG 다운) | ack 안 함 → broker 재전송 | ✅ |
 | 중복 message_id | ON CONFLICT로 흡수, ack | ✅ (무중복) |
-| 미등록 imei | 원본 저장됨. status=unregistered_device + error_log(device_lookup). 단말 등록 후 재처리 | ✅ (원본 보존) |
+| 미등록 imei | 원본 저장됨. status=unregistered_device + error_log(device_lookup). **도메인·위치 저장 안 함**. 단말 등록 후 재처리 | ✅ (원본 보존) |
 | 미등록 코드/파싱 실패 | 원본 저장됨. status=parse_error + error_log(projection). 파서 수정 후 재처리 | ✅ (원본 보존) |
+| 위치 저장 실패 | 원본 저장됨. error_log(location). 비치명(파서 projection은 계속) | ✅ (원본 보존) |
 
 ### 6.2 재처리
 
@@ -242,9 +263,9 @@ WHERE r.message_id = $1;
 
 ### 6.4 테스트 전략
 
-- **단위**: messageId(멱등), header(추출), 파서(parse 순수 변환).
-- **통합**(testcontainers PostgreSQL): repo(device/raw/domain/error), projectionService(파생 + parse_error 격리 + 에러 기록), messageProcessor(원본 저장 + 조회 + 파생 + 단계별 에러 + ack 신호).
-- **E2E**: Mosquitto + PG + 에이전트를 docker-compose로 기동, 단말 시뮬레이터 발행 → (a) messages_raw 원본, (b) domain_* 파생, (c) 미등록 imei→unregistered_device + error_log, (d) 미등록 코드→parse_error + error_log, (e) 중복→1건만 검증.
+- **단위**: messageId(멱등), header(추출), 파서(parse 순수 변환), locationProjector(lat/lon 있음→저장, 없음→스킵).
+- **통합**(testcontainers PostgreSQL): repo(device/raw/domain/location/error), projectionService(device_id 전파 + parse_error 격리 + 에러 기록), messageProcessor(원본 저장 + 조회 + 위치/도메인 파생 + 단계별 에러 + ack 신호).
+- **E2E**: Mosquitto + PG + 에이전트를 docker-compose로 기동, 단말 시뮬레이터 발행 → (a) messages_raw 원본, (b) domain_* 파생(device_id 포함), (c) domain_location 저장, (d) 미등록 imei→unregistered_device + error_log + 도메인/위치 미저장, (e) 미등록 코드→parse_error + error_log, (f) 중복→1건만 검증.
 
 ## 7. 향후 확장 경로
 
