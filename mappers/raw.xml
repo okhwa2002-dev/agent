@@ -3,15 +3,15 @@
 
   <insert id="insert">
     INSERT INTO messages_raw
-      (message_key, device_id, imei, message_code, process_dttm, latitude, longitude, raw_payload, status, received_at)
+      (message_key, device_id, imei, message_code, process_dttm, latitude, longitude, raw_payload, error_yn, error_detail, received_at)
     VALUES
-      (#{messageKey}, #{deviceId}, #{imei}, #{messageCode}, #{processDttm}, #{latitude}, #{longitude}, #{rawPayload}, #{status}, #{receivedAt})
+      (#{messageKey}, #{deviceId}, #{imei}, #{messageCode}, #{processDttm}, #{latitude}, #{longitude}, #{rawPayload}, #{errorYn}, #{errorDetail}, #{receivedAt})
     ON CONFLICT (message_key) DO NOTHING
     RETURNING message_id
   </insert>
 
-  <update id="markStatus">
-    UPDATE messages_raw SET status = #{status} WHERE message_id = #{messageId}
+  <update id="markError">
+    UPDATE messages_raw SET error_yn = 'Y', error_detail = #{errorDetail} WHERE message_id = #{messageId}
   </update>
 
 </mapper>

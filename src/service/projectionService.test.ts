@@ -21,7 +21,7 @@ let deviceId: string;
 const header: Header = { imei: '123', messageCode: 'Fault', processDttm: null, latitude: null, longitude: null };
 
 async function seed(messageKey: string, code: string, rawPayload: unknown): Promise<string> {
-  const id = await rawRepo.insert({ messageKey, deviceId, header: { ...header, messageCode: code }, rawPayload, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
+  const id = await rawRepo.insert({ messageKey, deviceId, header: { ...header, messageCode: code }, rawPayload, errorYn: 'N', errorDetail: null, receivedAt: '2026-06-09T09:03:00.000Z' });
   return id!;
 }
 
@@ -40,11 +40,11 @@ afterAll(async () => {
 });
 
 describe('ProjectionService', () => {
-  it('Fault 파생 + status=parsed', async () => {
+  it('Fault 파생 + error_yn=N', async () => {
     const mid = await seed('pk-1', 'Fault', { message: { ftp: '100', sp: '12', pcode: 'P0001' } });
     await svc.project(mid, deviceId, 'Fault', { message: { ftp: '100', sp: '12', pcode: 'P0001' } });
     expect((await pool.query('SELECT pcode FROM domain_fault WHERE message_id=$1', [mid])).rows[0].pcode).toBe('P0001');
-    expect((await pool.query('SELECT status FROM messages_raw WHERE message_id=$1', [mid])).rows[0].status).toBe('parsed');
+    expect((await pool.query('SELECT error_yn FROM messages_raw WHERE message_id=$1', [mid])).rows[0].error_yn).toBe('N');
   });
 
   it('전용 파서 없는 코드 → domain_generic 키별 행(EAV) + parsed', async () => {
@@ -56,6 +56,6 @@ describe('ProjectionService', () => {
       { key: 'status', value: '0' },
       { key: 'volt', value: '20' },
     ]);
-    expect((await pool.query('SELECT status FROM messages_raw WHERE message_id=$1', [mid])).rows[0].status).toBe('parsed');
+    expect((await pool.query('SELECT error_yn FROM messages_raw WHERE message_id=$1', [mid])).rows[0].error_yn).toBe('N');
   });
 });

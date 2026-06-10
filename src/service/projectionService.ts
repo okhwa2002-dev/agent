@@ -31,9 +31,9 @@ export class ProjectionService {
         const body = extractBusinessBody(rawPayload);
         await this.genericRepo.insertMany(messageId, deviceId, messageCode, body);
       }
-      await this.rawRepo.markStatus(messageId, 'parsed');
+      // 성공: error_yn은 INSERT 시 'N' 그대로 유지 (별도 작업 없음)
     } catch (err) {
-      await this.rawRepo.markStatus(messageId, 'parse_error');
+      await this.rawRepo.markError(messageId, String(err));
       await this.errorRepo.log({ messageId, stage: 'projection', messageCode, detail: String(err) });
     }
   }

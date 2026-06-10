@@ -20,11 +20,12 @@ CREATE TABLE IF NOT EXISTS messages_raw (
   latitude      NUMERIC,
   longitude     NUMERIC,
   raw_payload   JSONB NOT NULL,
-  status        TEXT NOT NULL DEFAULT 'received',
+  error_yn      CHAR(1) NOT NULL DEFAULT 'N' CHECK (error_yn IN ('Y','N')),
+  error_detail  TEXT,
   received_at   TIMESTAMPTZ NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_raw_status ON messages_raw (status) WHERE status <> 'parsed';
+CREATE INDEX IF NOT EXISTS idx_raw_error  ON messages_raw (received_at) WHERE error_yn = 'Y';
 CREATE INDEX IF NOT EXISTS idx_raw_code   ON messages_raw (message_code, received_at);
 CREATE INDEX IF NOT EXISTS idx_raw_device ON messages_raw (device_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_raw_imei   ON messages_raw (imei, received_at);
@@ -38,7 +39,8 @@ COMMENT ON COLUMN messages_raw.process_dttm IS '단말 처리 시각 (payload)';
 COMMENT ON COLUMN messages_raw.latitude     IS '공통 위치 - 위도 (payload)';
 COMMENT ON COLUMN messages_raw.longitude    IS '공통 위치 - 경도 (payload)';
 COMMENT ON COLUMN messages_raw.raw_payload  IS '단말 원본 JSON (무변형 보존)';
-COMMENT ON COLUMN messages_raw.status       IS '처리 상태: received | parsed | parse_error | unregistered_device';
+COMMENT ON COLUMN messages_raw.error_yn     IS '에러 여부 Y/N (미등록 단말/파싱·저장 실패 시 Y)';
+COMMENT ON COLUMN messages_raw.error_detail IS '에러 내용 (error_yn=Y일 때). 상세 단계 기록은 error_log 참조';
 COMMENT ON COLUMN messages_raw.received_at  IS '에이전트 수신 시각';
 COMMENT ON COLUMN messages_raw.created_at   IS '생성일시';
 

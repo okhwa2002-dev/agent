@@ -41,19 +41,20 @@ describe('repositories', () => {
 
   it('rawRepo: 신규는 message_id 반환, 중복(message_key)은 null + markStatus', async () => {
     const repo = new RawRepo(pool);
-    const base = { deviceId: null, header, rawPayload: { messageCode: 'Fault' }, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' };
+    const base = { deviceId: null, header, rawPayload: { messageCode: 'Fault' }, errorYn: 'N' as const, errorDetail: null, receivedAt: '2026-06-09T09:03:00.000Z' };
     const id1 = await repo.insert({ messageKey: 'key-1', ...base });
     expect(id1).not.toBeNull();
     expect(await repo.insert({ messageKey: 'key-1', ...base })).toBeNull(); // 중복
-    await repo.markStatus(id1!, 'parsed');
-    const r = await pool.query('SELECT status FROM messages_raw WHERE message_id = $1', [id1]);
-    expect(r.rows[0].status).toBe('parsed');
+    await repo.markError(id1!, 'boom');
+    const r = await pool.query('SELECT error_yn, error_detail FROM messages_raw WHERE message_id = $1', [id1]);
+    expect(r.rows[0].error_yn).toBe('Y');
+    expect(r.rows[0].error_detail).toBe('boom');
   });
 
   it('domainRepo: fault 멱등 INSERT (자체 id + message_id 참조)', async () => {
     const deviceId = await new DeviceRepo(pool).register('imei-dom');
     const raw = new RawRepo(pool);
-    const mid = await raw.insert({ messageKey: 'key-2', deviceId, header, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
+    const mid = await raw.insert({ messageKey: 'key-2', deviceId, header, rawPayload: {}, errorYn: 'N', errorDetail: null, receivedAt: '2026-06-09T09:03:00.000Z' });
     const repo = new DomainRepo(pool);
     await repo.insertFault(mid!, deviceId, { ftp: '100', sp: '12', pcode: 'P0001' });
     await repo.insertFault(mid!, deviceId, { ftp: '100', sp: '12', pcode: 'P0001' }); // 중복 무시
@@ -66,7 +67,7 @@ describe('repositories', () => {
   it('locationRepo: 위치 멱등 INSERT', async () => {
     const deviceId = await new DeviceRepo(pool).register('imei-loc');
     const raw = new RawRepo(pool);
-    const mid = await raw.insert({ messageKey: 'key-3', deviceId, header, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
+    const mid = await raw.insert({ messageKey: 'key-3', deviceId, header, rawPayload: {}, errorYn: 'N', errorDetail: null, receivedAt: '2026-06-09T09:03:00.000Z' });
     const repo = new LocationRepo(pool);
     await repo.insert(mid!, deviceId, '19.2', '203.1');
     await repo.insert(mid!, deviceId, '19.2', '203.1');
@@ -77,7 +78,7 @@ describe('repositories', () => {
 
   it('errorRepo: 단계별 오류 기록', async () => {
     const raw = new RawRepo(pool);
-    const mid = await raw.insert({ messageKey: 'key-4', deviceId: null, header, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
+    const mid = await raw.insert({ messageKey: 'key-4', deviceId: null, header, rawPayload: {}, errorYn: 'N', errorDetail: null, receivedAt: '2026-06-09T09:03:00.000Z' });
     const repo = new ErrorRepo(pool);
     await repo.log({ messageId: mid, messageKey: 'key-4', stage: 'projection', messageCode: 'Fault', detail: 'boom' });
     const res = await pool.query('SELECT stage, detail FROM error_log WHERE message_id = $1', [mid]);

@@ -44,14 +44,14 @@
         ├ 중복(message_id) → ack 후 종료
         └ 신규 → ★ MQTT ack ★
      → 분기
-        ├ device_id 없음(미등록) → status=unregistered_device + error_log(device_lookup) → 종료
+        ├ device_id 없음(미등록) → error_yn=Y + error_detail + error_log(device_lookup) → 종료
         │                          (도메인·위치 저장 안 함, 원본만 보존)
         └ device_id 있음
              ├ 위치 projection: lat/lon 있으면 domain_location 저장 (실패 → error_log(location))
              └ messageCode projection:
                   ├ 전용 파서(Fault) → domain_<code> / 없으면(catch-all) → domain_generic(키별 행 EAV)
-                  ├ 성공 → status=parsed
-                  └ 실제 파싱/저장 예외 → status=parse_error + error_log(projection)
+                  ├ 성공 → error_yn=N (그대로)
+                  └ 실제 파싱/저장 예외 → error_yn=Y + error_detail + error_log(projection)
 ```
 
 ### 핵심 규칙
@@ -59,7 +59,7 @@
 - **무손실(at-least-once):** `messages_raw` INSERT가 단일 내구성 지점이다. INSERT 성공 후에만 MQTT puback(ack)을 보낸다. PG 장애 시 ack하지 않아 broker가 재전송한다.
 - **무중복(멱등):** `messages_raw.message_key`(TEXT UNIQUE)가 멱등 키이며 `ON CONFLICT (message_key) DO NOTHING`으로 재전송 중복을 흡수한다. `message_key`는 결정적으로 유도된다(단말 고유 ID 우선, 없으면 `deviceId + 원본텍스트`의 sha256). `message_id`는 BIGSERIAL 숫자 PK로, 도메인/에러 테이블이 참조한다.
 - **원본이 진실의 원천:** 어떤 단계가 실패해도 `messages_raw` 원본은 항상 보존된다. 파서 수정·단말 등록 후 원본을 재처리하면 복구된다(단말 재수집 불필요).
-- **ack 이후 단계는 비치명:** 원본 저장(=ack) 다음의 위치/업무 파생 실패는 재전송을 유발하지 않고 `error_log` + `status`로 격리한다(poison message 무한 재전송 방지).
+- **ack 이후 단계는 비치명:** 원본 저장(=ack) 다음의 위치/업무 파생 실패는 재전송을 유발하지 않고 `error_log` + `error_yn`로 격리한다(poison message 무한 재전송 방지).
 - **단계별 추적:** 모든 오류는 `error_log`에 `message_id` + `stage`로 기록되어 원본·업무·에러를 한 키로 추적한다.
 
 ---
@@ -83,7 +83,7 @@
 
 추적 조회 예시:
 ```sql
-SELECT d.imei, r.message_code, r.status,
+SELECT d.imei, r.message_code, r.error_yn, r.error_detail,
        f.ftp, f.sp, f.pcode, l.latitude, l.longitude,
        e.stage AS error_stage, e.detail AS error_detail
 FROM messages_raw r
@@ -111,7 +111,7 @@ src/
 │   └── mapper.ts           # MyBatis식 XML 매퍼 로더 (#{name}→$1 + 값 바인딩)
 ├── repo/
 │   ├── deviceRepo.ts       # imei → device_id 조회/등록
-│   ├── rawRepo.ts          # messages_raw 멱등 INSERT / status 전이
+│   ├── rawRepo.ts          # messages_raw 멱등 INSERT / markError(error_yn,error_detail)
 │   ├── domainRepo.ts       # domain_fault INSERT
 │   ├── locationRepo.ts     # domain_location INSERT
 │   └── errorRepo.ts        # error_log 기록
@@ -185,7 +185,7 @@ DATABASE_URL=postgres://postgres:pw@localhost:5432/agent \
 4. **등록:** `src/parsers/registry.ts`의 `defaultRegistry()`에 파서 추가.
 5. **테스트:** 파서 단위 테스트 + (필요 시) 통합 테스트.
 
-> 미등록 messageCode는 자동으로 `status=parse_error` + `error_log(projection)`로 격리되므로, 파서 추가 후 해당 원본을 재처리하면 반영된다.
+> 전용 파서 없는 코드는 자동으로 `domain_generic`(EAV)에 저장되고 `error_yn='N'`이다. 실제 파싱/저장 예외 시에만 `error_yn='Y'` + `error_detail` + `error_log(projection)`로 격리된다.
 
 ---
 
@@ -206,5 +206,5 @@ DATABASE_URL=postgres://postgres:pw@localhost:5432/agent \
 
 - 추가 업무 테이블(§6 절차로 확장).
 - 미등록 단말 / `parse_error` 자동 재처리 배치(단말 등록·파서 수정 후 원본 재파싱).
-- 관측성: status별 건수, error_log 단계별 건수, end-to-end latency 지표 + `/metrics`.
+- 관측성: error_yn='Y' 건수, error_log 단계별 건수, end-to-end latency 지표 + `/metrics`.
 - E2E: Mosquitto + PG + 에이전트 docker-compose로 단말→DB 전 구간 검증.

@@ -19,7 +19,7 @@ let deviceId: string;
 const base: Header = { imei: 'i', messageCode: 'Fault', processDttm: null, latitude: '19.2', longitude: '203.1' };
 
 async function seed(messageKey: string): Promise<string> {
-  const id = await rawRepo.insert({ messageKey, deviceId, header: base, rawPayload: {}, status: 'received', receivedAt: '2026-06-09T09:03:00.000Z' });
+  const id = await rawRepo.insert({ messageKey, deviceId, header: base, rawPayload: {}, errorYn: 'N', errorDetail: null, receivedAt: '2026-06-09T09:03:00.000Z' });
   return id!;
 }
 
