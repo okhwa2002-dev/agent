@@ -176,6 +176,7 @@ CREATE TABLE messages_raw (
   message_id    BIGSERIAL PRIMARY KEY,      -- 숫자 surrogate PK = 전 계층 매핑 키
   message_key   TEXT NOT NULL UNIQUE,       -- 멱등 키(에이전트 결정적 생성) = 재전송 중복 흡수
   device_id     BIGINT REFERENCES devices(device_id),  -- imei 조회 결과. 미등록 시 NULL
+  imei          TEXT,                        -- payload 추출 (미등록 단말 추적용)
   message_code  TEXT NOT NULL,
   process_dttm  TIMESTAMPTZ,
   latitude      NUMERIC,
