@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import type { Header } from '../header.js';
+import { getQuery } from '../db/mapper.js';
 
 export interface RawInsert {
   messageKey: string;            // 멱등 키 (에이전트 결정적 생성)
@@ -17,26 +18,25 @@ export class RawRepo {
    * 원본 멱등 적재. 신규면 생성된 message_id(BIGINT 문자열), 중복(message_key 충돌)이면 null.
    */
   async insert(r: RawInsert): Promise<string | null> {
-    const res = await this.pool.query<{ message_id: string }>(
-      `INSERT INTO messages_raw
-         (message_key, device_id, imei, message_code, process_dttm, latitude, longitude, raw_payload, status, received_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (message_key) DO NOTHING
-       RETURNING message_id`,
-      [
-        r.messageKey, r.deviceId, r.header.imei, r.header.messageCode,
-        r.header.processDttm, r.header.latitude, r.header.longitude,
-        JSON.stringify(r.rawPayload), r.status, r.receivedAt,
-      ],
-    );
+    const { text, values } = getQuery('raw', 'insert', {
+      messageKey: r.messageKey,
+      deviceId: r.deviceId,
+      imei: r.header.imei,
+      messageCode: r.header.messageCode,
+      processDttm: r.header.processDttm,
+      latitude: r.header.latitude,
+      longitude: r.header.longitude,
+      rawPayload: JSON.stringify(r.rawPayload),
+      status: r.status,
+      receivedAt: r.receivedAt,
+    });
+    const res = await this.pool.query<{ message_id: string }>(text, values);
     return res.rows[0]?.message_id ?? null;
   }
 
   /** status 전이 (received | parsed | parse_error | unregistered_device). */
   async markStatus(messageId: string, status: string): Promise<void> {
-    await this.pool.query(
-      'UPDATE messages_raw SET status = $2 WHERE message_id = $1',
-      [messageId, status],
-    );
+    const { text, values } = getQuery('raw', 'markStatus', { messageId, status });
+    await this.pool.query(text, values);
   }
 }

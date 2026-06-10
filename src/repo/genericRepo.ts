@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { getQuery } from '../db/mapper.js';
 
 export class GenericRepo {
   constructor(private readonly pool: Pool) {}
@@ -7,11 +8,8 @@ export class GenericRepo {
   async insertMany(messageId: string, deviceId: string, messageCode: string, body: Record<string, unknown>): Promise<void> {
     for (const [key, v] of Object.entries(body)) {
       const value = v == null ? null : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-      await this.pool.query(
-        `INSERT INTO domain_generic (message_id, device_id, message_code, key, value)
-         VALUES ($1,$2,$3,$4,$5) ON CONFLICT (message_id, key) DO NOTHING`,
-        [messageId, deviceId, messageCode, key, value],
-      );
+      const { text, values } = getQuery('generic', 'insert', { messageId, deviceId, messageCode, key, value });
+      await this.pool.query(text, values);
     }
   }
 }

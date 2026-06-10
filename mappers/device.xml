@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="device">
+
+  <select id="findDeviceIdByImei">
+    SELECT device_id FROM devices WHERE imei = #{imei}
+  </select>
+
+  <insert id="register">
+    INSERT INTO devices (imei) VALUES (#{imei})
+    ON CONFLICT (imei) DO UPDATE SET imei = EXCLUDED.imei
+    RETURNING device_id
+  </insert>
+
+</mapper>

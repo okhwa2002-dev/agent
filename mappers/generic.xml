@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="generic">
+
+  <insert id="insert">
+    INSERT INTO domain_generic (message_id, device_id, message_code, key, value)
+    VALUES (#{messageId}, #{deviceId}, #{messageCode}, #{key}, #{value})
+    ON CONFLICT (message_id, key) DO NOTHING
+  </insert>
+
+</mapper>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="location">
+
+  <insert id="insert">
+    INSERT INTO domain_location (message_id, device_id, latitude, longitude)
+    VALUES (#{messageId}, #{deviceId}, #{latitude}, #{longitude})
+    ON CONFLICT (message_id) DO NOTHING
+  </insert>
+
+</mapper>

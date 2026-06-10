@@ -107,7 +107,8 @@ src/
 ├── db/
 │   ├── pool.ts             # pg Pool 팩토리
 │   ├── schema.sql          # 전체 DDL + 코멘트
-│   └── applySchema.ts      # 스키마 적용 헬퍼
+│   ├── applySchema.ts      # 스키마 적용 헬퍼
+│   └── mapper.ts           # MyBatis식 XML 매퍼 로더 (#{name}→$1 + 값 바인딩)
 ├── repo/
 │   ├── deviceRepo.ts       # imei → device_id 조회/등록
 │   ├── rawRepo.ts          # messages_raw 멱등 INSERT / status 전이
@@ -128,6 +129,8 @@ src/
 ```
 
 설계 원칙: 각 파일은 단일 책임. 파서·헤더 추출 등 변환 로직은 I/O 없는 순수 함수로 격리하여 단위 테스트 가능. `MessageProcessor`가 유일한 처리 오케스트레이터.
+
+**SQL 위치:** 모든 쿼리는 프로젝트 루트 `mappers/<repo>.xml`(MyBatis식 매퍼)에 분리. repo는 `getQuery('<ns>','<id>', params)`로 SQL을 받아 실행한다. `#{name}`은 로더가 `$1` 위치 파라미터로 변환하므로 **pg 파라미터라이즈드 쿼리**가 유지된다(PG 안전, 인젝션 방어). 새 쿼리는 해당 XML에 추가. (mappers는 루트라 dist 복사 불필요 — `../../mappers`가 src/dist 양쪽에서 해석됨)
 
 ---
 

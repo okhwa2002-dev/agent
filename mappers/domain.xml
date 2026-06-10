@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="domain">
+
+  <insert id="insertFault">
+    INSERT INTO domain_fault (message_id, device_id, ftp, sp, pcode)
+    VALUES (#{messageId}, #{deviceId}, #{ftp}, #{sp}, #{pcode})
+    ON CONFLICT (message_id) DO NOTHING
+  </insert>
+
+</mapper>
