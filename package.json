@@ -6,7 +6,8 @@
     "build": "tsc && node -e \"require('fs').mkdirSync('dist/db',{recursive:true});require('fs').copyFileSync('src/db/schema.sql','dist/db/schema.sql')\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "pub": "node scripts/pub.mjs"
   },
   "dependencies": {
     "mqtt": "^5.10.1",
