@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { getQuery } from '../db/mapper.js';
 
 export interface FaultRecord {
   ftp: string | null;
@@ -11,10 +12,9 @@ export class DomainRepo {
 
   /** domain_fault 멱등 INSERT. */
   async insertFault(messageId: string, deviceId: string, rec: FaultRecord): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO domain_fault (message_id, device_id, ftp, sp, pcode)
-       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (message_id) DO NOTHING`,
-      [messageId, deviceId, rec.ftp, rec.sp, rec.pcode],
-    );
+    const { text, values } = getQuery('domain', 'insertFault', {
+      messageId, deviceId, ftp: rec.ftp, sp: rec.sp, pcode: rec.pcode,
+    });
+    await this.pool.query(text, values);
   }
 }

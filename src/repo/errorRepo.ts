@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { getQuery } from '../db/mapper.js';
 
 export type ErrorStage = 'ingest' | 'device_lookup' | 'projection' | 'location';
 
@@ -17,10 +18,15 @@ export class ErrorRepo {
 
   /** error_log에 단계별 오류 기록. */
   async log(e: ErrorEntry): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO error_log (message_id, message_key, stage, message_code, imei, detail, raw_text)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [e.messageId ?? null, e.messageKey ?? null, e.stage, e.messageCode ?? null, e.imei ?? null, e.detail, e.rawText ?? null],
-    );
+    const { text, values } = getQuery('error', 'log', {
+      messageId: e.messageId ?? null,
+      messageKey: e.messageKey ?? null,
+      stage: e.stage,
+      messageCode: e.messageCode ?? null,
+      imei: e.imei ?? null,
+      detail: e.detail,
+      rawText: e.rawText ?? null,
+    });
+    await this.pool.query(text, values);
   }
 }

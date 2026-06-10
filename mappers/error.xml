@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="error">
+
+  <insert id="log">
+    INSERT INTO error_log (message_id, message_key, stage, message_code, imei, detail, raw_text)
+    VALUES (#{messageId}, #{messageKey}, #{stage}, #{messageCode}, #{imei}, #{detail}, #{rawText})
+  </insert>
+
+</mapper>
