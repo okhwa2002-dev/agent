@@ -72,12 +72,12 @@ describe('MessageProcessor', () => {
     expect(loc.rowCount).toBe(0);
   });
 
-  it('Fault 외 코드(Sensor) → domain_generic에 JSONB 저장', async () => {
-    await proc.handle('device/dev/msg', buf({ imei: 'imei-ok', messageCode: 'Sensor', message: { temp: '25', hum: '60' } }));
+  it('Fault 외 코드(Sensor, 평면) → domain_generic 키별 행(EAV)', async () => {
+    await proc.handle('device/dev/msg', buf({ imei: 'imei-ok', messageCode: 'Sensor', volt: '20', air: '100', status: '0' }));
     const raw = await pool.query("SELECT message_id FROM messages_raw WHERE message_code='Sensor'");
-    const g = await pool.query('SELECT data, message_code, device_id FROM domain_generic WHERE message_id=$1', [raw.rows[0].message_id]);
-    expect(g.rows[0].message_code).toBe('Sensor');
-    expect(g.rows[0].data).toEqual({ temp: '25', hum: '60' });
+    const g = await pool.query('SELECT key, value, device_id FROM domain_generic WHERE message_id=$1 ORDER BY key', [raw.rows[0].message_id]);
+    expect(g.rows.map((r) => r.key)).toEqual(['air', 'status', 'volt']);
+    expect(g.rows.find((r) => r.key === 'volt').value).toBe('20');
     expect(g.rows[0].device_id).toBe(deviceId);
   });
 

@@ -3,11 +3,12 @@ import type { DomainRepo } from '../repo/domainRepo.js';
 import type { GenericRepo } from '../repo/genericRepo.js';
 import type { ErrorRepo } from '../repo/errorRepo.js';
 import type { ParserRegistry } from '../parsers/registry.js';
+import { extractBusinessBody } from '../header.js';
 
 /**
  * raw → 업무 코드 분기 → 도메인 파생.
  * - 전용 파서 있음(예: Fault) → 타입 컬럼 테이블
- * - 없음(catch-all) → domain_generic에 message 본문을 JSONB로 저장
+ * - 없음(catch-all) → domain_generic에 본문 키마다 한 행씩(EAV) 저장
  * 실제 파싱/저장 예외 시에만 status=parse_error + error_log.
  */
 export class ProjectionService {
@@ -26,9 +27,9 @@ export class ProjectionService {
         const parsed = parser.parse(rawPayload);
         await parser.insert(this.domainRepo, messageId, deviceId, parsed);
       } else {
-        // catch-all: message 본문(키:값)을 범용 테이블에 JSONB로 저장
-        const body = (rawPayload as { message?: unknown } | null)?.message ?? {};
-        await this.genericRepo.insert(messageId, deviceId, messageCode, body);
+        // catch-all: 본문(키:값) 추출(평면/중첩 통일) → 키마다 한 행씩 저장
+        const body = extractBusinessBody(rawPayload);
+        await this.genericRepo.insertMany(messageId, deviceId, messageCode, body);
       }
       await this.rawRepo.markStatus(messageId, 'parsed');
     } catch (err) {

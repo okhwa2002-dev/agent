@@ -47,13 +47,15 @@ describe('ProjectionService', () => {
     expect((await pool.query('SELECT status FROM messages_raw WHERE message_id=$1', [mid])).rows[0].status).toBe('parsed');
   });
 
-  it('전용 파서 없는 코드 → domain_generic(JSONB) + parsed (catch-all)', async () => {
-    const mid = await seed('pk-2', 'Sensor', { message: { temp: '25', hum: '60' } });
-    await svc.project(mid, deviceId, 'Sensor', { message: { temp: '25', hum: '60' } });
-    const g = await pool.query('SELECT message_code, data, device_id FROM domain_generic WHERE message_id=$1', [mid]);
-    expect(g.rows[0].message_code).toBe('Sensor');
-    expect(g.rows[0].data).toEqual({ temp: '25', hum: '60' });
-    expect(g.rows[0].device_id).toBe(deviceId);
+  it('전용 파서 없는 코드 → domain_generic 키별 행(EAV) + parsed', async () => {
+    const mid = await seed('pk-2', 'Sensor', { volt: '20', air: '100', status: '0' });
+    await svc.project(mid, deviceId, 'Sensor', { messageCode: 'Sensor', volt: '20', air: '100', status: '0' });
+    const g = await pool.query('SELECT key, value FROM domain_generic WHERE message_id=$1 ORDER BY key', [mid]);
+    expect(g.rows).toEqual([
+      { key: 'air', value: '100' },
+      { key: 'status', value: '0' },
+      { key: 'volt', value: '20' },
+    ]);
     expect((await pool.query('SELECT status FROM messages_raw WHERE message_id=$1', [mid])).rows[0].status).toBe('parsed');
   });
 });
