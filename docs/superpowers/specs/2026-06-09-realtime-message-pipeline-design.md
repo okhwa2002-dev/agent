@@ -210,9 +210,8 @@ CREATE TABLE domain_location (
 -- 범용 업무 테이블 (catch-all, EAV). 전용 파서 없는 코드의 본문을 키마다 한 행씩 저장.
 CREATE TABLE domain_generic (
   id           BIGSERIAL PRIMARY KEY,
-  message_id   BIGINT NOT NULL REFERENCES messages_raw(message_id),
+  message_id   BIGINT NOT NULL REFERENCES messages_raw(message_id),  -- 업무 코드는 messages_raw.message_code 참조
   device_id    BIGINT NOT NULL REFERENCES devices(device_id),
-  message_code TEXT NOT NULL,
   key          TEXT NOT NULL,             -- 업무 본문 키
   value        TEXT,                       -- 값(객체면 JSON 문자열)
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

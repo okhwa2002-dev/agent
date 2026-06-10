@@ -88,7 +88,6 @@ CREATE TABLE IF NOT EXISTS domain_generic (
   id           BIGSERIAL PRIMARY KEY,
   message_id   BIGINT NOT NULL REFERENCES messages_raw(message_id),
   device_id    BIGINT NOT NULL REFERENCES devices(device_id),
-  message_code TEXT NOT NULL,
   key          TEXT NOT NULL,
   value        TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -99,9 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_generic_device  ON domain_generic (device_id);
 CREATE INDEX IF NOT EXISTS idx_generic_key     ON domain_generic (key);
 COMMENT ON TABLE  domain_generic              IS '범용 업무 파생 테이블(catch-all, EAV): 전용 파서 없는 코드의 본문을 키:값 한 행씩 저장';
 COMMENT ON COLUMN domain_generic.id           IS '자체 시퀀스 PK';
-COMMENT ON COLUMN domain_generic.message_id   IS '원본(messages_raw.message_id) 참조용 보관';
+COMMENT ON COLUMN domain_generic.message_id   IS '원본(messages_raw.message_id) 참조용 보관 (업무 코드는 messages_raw.message_code 참조)';
 COMMENT ON COLUMN domain_generic.device_id    IS '단말 식별 (단말별 조회용)';
-COMMENT ON COLUMN domain_generic.message_code IS '업무 구분자';
 COMMENT ON COLUMN domain_generic.key          IS '업무 본문 키';
 COMMENT ON COLUMN domain_generic.value        IS '업무 본문 값 (객체면 JSON 문자열)';
 COMMENT ON COLUMN domain_generic.created_at   IS '생성일시';

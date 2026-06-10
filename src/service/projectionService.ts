@@ -29,7 +29,7 @@ export class ProjectionService {
       } else {
         // catch-all: 본문(키:값) 추출(평면/중첩 통일) → 키마다 한 행씩 저장
         const body = extractBusinessBody(rawPayload);
-        await this.genericRepo.insertMany(messageId, deviceId, messageCode, body);
+        await this.genericRepo.insertMany(messageId, deviceId, body);
       }
       // 성공: error_yn은 INSERT 시 'N' 그대로 유지 (별도 작업 없음)
     } catch (err) {
