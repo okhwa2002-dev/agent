@@ -39,7 +39,7 @@ Redis 버퍼가 없으므로 **PG의 `messages_raw` INSERT가 단일 내구성 �
 
 - 수신 → 원본 INSERT 성공 → **그때 MQTT ack**. INSERT 실패(PG 다운 등) → ack 안 함 → Mosquitto가 QoS1으로 재전송.
 - `message_key` UNIQUE + `ON CONFLICT (message_key) DO NOTHING` → 재전송으로 인한 중복은 자동 흡수.
-- 원본 저장(=ack) **이후** 단계(단말 조회·업무 파생)의 실패는 재전송을 유발하지 않는다. 원본은 이미 보존되어 있고 `error_log` + `status`로 격리되어 별도 재처리한다(poison message 무한 재전송 방지).
+- 원본 저장(=ack) **이후** 단계(단말 조회·업무 파생)의 실패는 재전송을 유발하지 않는다. 원본은 이미 보존되어 있고 `error_log` + `error_yn`로 격리되어 별도 재처리한다(poison message 무한 재전송 방지).
 
 ## 2. 아키텍처 & 데이터 흐름
 
@@ -63,8 +63,8 @@ Redis 버퍼가 없으므로 **PG의 `messages_raw` INSERT가 단일 내구성 �
 
 1. **수신·파싱**: Mosquitto 구독 → 메시지 수신 → JSON 파싱. 파싱 실패 시 `error_log`(stage=ingest, raw_text 보존) 기록 후 ack.
 2. **원본 저장**: `messageId` 부여 + 공통 헤더(imei, messageCode, process_dttm, lat/lon) 추출 → `messages_raw` INSERT(`ON CONFLICT DO NOTHING`). **성공 시 MQTT ack.** 중복이면 이후 단계 생략.
-3. **단말 조회**: `imei`로 `devices` 조회 → `device_id`. 미등록이면 `status='unregistered_device'` + `error_log`(stage=device_lookup).
-4. **업무 파생**: `messageCode`로 파서 분기 → `message.*`를 `domain_*` 테이블에 저장 → `status='parsed'`. 미등록 코드/파싱 실패 시 `status='parse_error'` + `error_log`(stage=projection).
+3. **단말 조회**: `imei`로 `devices` 조회 → `device_id`. 미등록이면 `error_yn='Y'` + `error_detail` + `error_log`(stage=device_lookup).
+4. **업무 파생**: `messageCode`로 분기 → 전용(Fault)/범용(EAV) 저장. 실제 예외 시 `error_yn='Y'` + `error_detail` + `error_log`(stage=projection).
 
 ### 2.2 무손실-무중복 완결
 
@@ -107,7 +107,7 @@ src/
 | messageId | 결정적 멱등 키(message_key) 유도(단말 고유 ID 우선, 없으면 deviceId+rawText 해시) |
 | header | rawPayload에서 공통 헤더(imei/messageCode/process_dttm/lat/lon) 추출 |
 | DeviceRepo | imei → device_id 조회, 단말 등록 |
-| RawRepo | messages_raw 멱등 INSERT, status 전이 |
+| RawRepo | messages_raw 멱등 INSERT, error_yn/error_detail 표시(markError) |
 | DomainRepo | 업무 도메인 테이블 INSERT(멱등, device_id 포함) |
 | LocationRepo | domain_location INSERT(멱등, device_id 포함) |
 | ErrorRepo | error_log 기록 (stage, message_id, detail, raw_text) |
@@ -136,7 +136,7 @@ src/
         ├ 중복 → ack 후 종료 (이미 처리됨)
         └ 신규 → ★ MQTT ack ★
      → 분기:
-        ├ device_id 없음(미등록) → status='unregistered_device' + error_log(stage=device_lookup)
+        ├ device_id 없음(미등록) → error_yn='Y' + error_detail + error_log(stage=device_lookup)
         │                          → 종료 (도메인·위치 저장 안 함, 원본만 보존)
         └ device_id 있음 →
              ├ 위치 projection: lat/lon 있으면 domain_location(device_id) 저장
@@ -144,8 +144,8 @@ src/
              └ messageCode projection:
                   ├ 전용 파서 있음(Fault) → domain_<code>(device_id) 저장
                   ├ 없음(catch-all) → 본문 키마다 domain_generic에 한 행씩(EAV) 저장
-                  ├ 성공 → status='parsed'
-                  └ 실제 파싱/저장 예외 → status='parse_error' + error_log(stage=projection)
+                  ├ 성공 → error_yn 그대로 'N'
+                  └ 실제 파싱/저장 예외 → error_yn='Y' + error_detail + error_log(stage=projection)
 ```
 
 **불변식:** 원본 저장(=ack) 이후 단계가 모두 실패해도 원본과 에러 기록은 남는다. PG 자체 장애만이 재전송을 유발하며, 그 경우에도 무손실이 유지된다.
@@ -185,7 +185,8 @@ CREATE TABLE messages_raw (
   latitude      NUMERIC,
   longitude     NUMERIC,
   raw_payload   JSONB NOT NULL,             -- 단말 원본 JSON 무변형
-  status        TEXT NOT NULL DEFAULT 'received',  -- received | parsed | parse_error | unregistered_device
+  error_yn      CHAR(1) NOT NULL DEFAULT 'N',  -- 에러 여부 Y/N
+  error_detail  TEXT,                          -- 에러 내용 (error_yn=Y일 때)
   received_at   TIMESTAMPTZ NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -239,7 +240,7 @@ CREATE TABLE error_log (
 
 **추적 조회 예시 (원본 + 업무 + 단말 + 에러):**
 ```sql
-SELECT d.imei, r.device_id, r.message_code, r.status, r.process_dttm,
+SELECT d.imei, r.device_id, r.message_code, r.error_yn, r.error_detail, r.process_dttm,
        f.ftp, f.sp, f.pcode,
        l.latitude, l.longitude,
        e.stage AS error_stage, e.detail AS error_detail
@@ -263,18 +264,18 @@ WHERE r.message_id = $1;
 | JSON 파싱 실패 | error_log(stage=ingest, raw_text) 기록 후 ack (재전송 무의미) | ✅ (원본 보존) |
 | messages_raw INSERT 실패(PG 다운) | ack 안 함 → broker 재전송 | ✅ |
 | 중복(message_key) | ON CONFLICT (message_key)로 흡수, ack | ✅ (무중복) |
-| 미등록 imei | 원본 저장됨. status=unregistered_device + error_log(device_lookup). **도메인·위치 저장 안 함**. 단말 등록 후 재처리 | ✅ (원본 보존) |
-| 전용 파서 없는 코드 | catch-all로 domain_generic(키별 행, EAV) 저장, status=parsed (오류 아님) | ✅ |
-| 파싱/저장 실제 예외 | 원본 저장됨. status=parse_error + error_log(projection). 수정 후 재처리 | ✅ (원본 보존) |
+| 미등록 imei | 원본 저장됨. error_yn='Y' + error_detail + error_log(device_lookup). **도메인·위치 저장 안 함**. 단말 등록 후 재처리 | ✅ (원본 보존) |
+| 전용 파서 없는 코드 | catch-all로 domain_generic(키별 행, EAV) 저장, error_yn='N' (오류 아님) | ✅ |
+| 파싱/저장 실제 예외 | 원본 저장됨. error_yn='Y' + error_detail + error_log(projection). 수정 후 재처리 | ✅ (원본 보존) |
 | 위치 저장 실패 | 원본 저장됨. error_log(location). 비치명(파서 projection은 계속) | ✅ (원본 보존) |
 
 ### 6.2 재처리
 
-원본이 항상 보존되므로, `error_log` 또는 `messages_raw.status`(parse_error / unregistered_device)를 기준으로 미완료 행을 재파싱·재조회한다(단말 등록 또는 파서 수정 후). 단말 재수집 불필요.
+원본이 항상 보존되므로, `error_log` 또는 `messages_raw.error_yn='Y'`(error_detail 포함)를 기준으로 오류 행을 재파싱·재조회한다(단말 등록 또는 파서 수정 후). 단말 재수집 불필요.
 
 ### 6.3 관측성
 
-- 핵심 지표: 수신율, status별 건수(received/parsed/parse_error/unregistered_device), error_log 단계별 건수, end-to-end latency.
+- 핵심 지표: 수신율, error_yn='Y' 건수, error_log 단계별 건수, end-to-end latency.
 - 구조화 로그(JSON) + 선택적 `/metrics`(Prometheus).
 
 ### 6.4 테스트 전략

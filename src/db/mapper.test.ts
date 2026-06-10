@@ -10,10 +10,10 @@ describe('getQuery (MyBatis XML → pg 파라미터)', () => {
   });
 
   it('여러 파라미터를 등장 순서대로 바인딩한다', () => {
-    const q = getQuery('raw', 'markStatus', { status: 'parsed', messageId: '7' });
-    expect(q.text).toMatch(/status = \$1/);
+    const q = getQuery('raw', 'markError', { errorDetail: 'boom', messageId: '7' });
+    expect(q.text).toMatch(/error_detail = \$1/);
     expect(q.text).toMatch(/message_id = \$2/);
-    expect(q.values).toEqual(['parsed', '7']);
+    expect(q.values).toEqual(['boom', '7']);
   });
 
   it('누락 파라미터는 throw', () => {

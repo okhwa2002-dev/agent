@@ -35,18 +35,19 @@ export class MessageProcessor {
 
     // imei로 device_id 조회 (PG 오류면 throw → 재전송)
     const deviceId = await this.deviceRepo.findDeviceIdByImei(header.imei);
-    const status = deviceId ? 'received' : 'unregistered_device';
+    const unregisteredDetail = deviceId ? null : `unregistered imei: ${header.imei}`;
 
     // 원본 적재 (내구성 지점). 신규면 message_id 반환, 중복(message_key)이면 null.
     const messageId = await this.rawRepo.insert({
-      messageKey, deviceId, header, rawPayload: payload, status,
+      messageKey, deviceId, header, rawPayload: payload,
+      errorYn: deviceId ? 'N' : 'Y', errorDetail: unregisteredDetail,
       receivedAt: this.clock.now().toISOString(),
     });
     if (messageId == null) return; // 중복 → ack
 
     if (!deviceId) {
-      // 미등록 단말: 원본만 보존, 도메인/위치 저장 안 함, 추적 기록
-      await this.errorRepo.log({ messageId, messageKey, stage: 'device_lookup', imei: header.imei, messageCode: header.messageCode, detail: `unregistered imei: ${header.imei}` });
+      // 미등록 단말: 원본만 보존(error_yn=Y), 도메인/위치 저장 안 함, 추적 기록
+      await this.errorRepo.log({ messageId, messageKey, stage: 'device_lookup', imei: header.imei, messageCode: header.messageCode, detail: unregisteredDetail! });
       return;
     }
 

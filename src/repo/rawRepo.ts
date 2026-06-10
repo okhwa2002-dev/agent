@@ -7,7 +7,8 @@ export interface RawInsert {
   deviceId: string | null;       // imei 조회 결과 (BIGINT 문자열) 또는 null
   header: Header;
   rawPayload: unknown;
-  status: string;
+  errorYn: 'Y' | 'N';            // 에러 여부
+  errorDetail: string | null;    // 에러 내용 (errorYn='Y'일 때)
   receivedAt: string;
 }
 
@@ -27,16 +28,17 @@ export class RawRepo {
       latitude: r.header.latitude,
       longitude: r.header.longitude,
       rawPayload: JSON.stringify(r.rawPayload),
-      status: r.status,
+      errorYn: r.errorYn,
+      errorDetail: r.errorDetail,
       receivedAt: r.receivedAt,
     });
     const res = await this.pool.query<{ message_id: string }>(text, values);
     return res.rows[0]?.message_id ?? null;
   }
 
-  /** status 전이 (received | parsed | parse_error | unregistered_device). */
-  async markStatus(messageId: string, status: string): Promise<void> {
-    const { text, values } = getQuery('raw', 'markStatus', { messageId, status });
+  /** 에러 표시: error_yn='Y' + error_detail 기록. */
+  async markError(messageId: string, errorDetail: string): Promise<void> {
+    const { text, values } = getQuery('raw', 'markError', { messageId, errorDetail });
     await this.pool.query(text, values);
   }
 }
