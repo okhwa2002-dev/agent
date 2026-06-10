@@ -92,11 +92,21 @@ docker exec agent-mosquitto mosquitto_sub -t "device/+/msg" -v
 ```
 - `-v` : 토픽 + payload 함께 출력
 
-### D. GUI 도구
+### D. GUI / 데스크톱 도구
 
 **MQTTX(데스크톱)** 또는 **MQTT Explorer**: 연결 `localhost` / 포트 `1883` / 인증 없음 → 토픽 `device/A/msg`에 JSON 발행. 시각적으로 pub/sub 확인.
 
-> ⚠️ **브라우저로 `http://localhost:1883` 접속은 안 됩니다** (`ERR_EMPTY_RESPONSE`). MQTT는 HTTP가 아니라 raw TCP입니다. 웹/브라우저 MQTT 도구를 쓰려면 Mosquitto에 WebSocket 리스너(예: 9001)를 별도로 열어야 합니다.
+### E. 브라우저(웹) MQTT 클라이언트 — WebSocket `ws://localhost:9001`
+
+Mosquitto에 WebSocket 리스너(9001)가 열려 있어 **브라우저에서 직접** pub/sub 가능합니다.
+
+- **MQTTX Web**: https://mqttx.app/web-client
+- **HiveMQ Websocket Client**: http://www.hivemq.com/demos/websocket-client/
+- 접속 설정: 호스트 `localhost`, 포트 `9001`, 경로 `/`, 프로토콜 `ws` (인증 없음)
+
+> ⚠️ 브라우저 **주소창에 `http://localhost:1883` 입력은 안 됩니다** (`ERR_EMPTY_RESPONSE`). MQTT는 HTTP가 아니라 raw TCP/WebSocket입니다. 브라우저에선 위 **웹 MQTT 클라이언트**로 `ws://localhost:9001`에 접속하세요.
+>
+> 포트: `1883`=TCP(에이전트·CLI), `9001`=WebSocket(브라우저). 둘 다 같은 브로커.
 
 ---
 
