@@ -48,9 +48,10 @@
         │                          (도메인·위치 저장 안 함, 원본만 보존)
         └ device_id 있음
              ├ 위치 projection: lat/lon 있으면 domain_location 저장 (실패 → error_log(location))
-             └ messageCode 파서: domain_<code> 저장
-                 ├ 성공 → status=parsed
-                 └ 미등록 코드/실패 → status=parse_error + error_log(projection)
+             └ messageCode projection:
+                  ├ 전용 파서(Fault) → domain_<code> / 없으면(catch-all) → domain_generic(JSONB)
+                  ├ 성공 → status=parsed
+                  └ 실제 파싱/저장 예외 → status=parse_error + error_log(projection)
 ```
 
 ### 핵심 규칙
@@ -73,6 +74,7 @@
 | `messages_raw` | 원본 적재(불변, bronze). 원본 JSON + 공통 헤더(imei/process_dttm/lat/lon) | PK `message_id`(BIGSERIAL), UNIQUE `message_key`(멱등), FK `device_id`, `imei`(추적) |
 | `domain_fault` | 업무(고장) 파생. `message.{ftp,sp,pcode}` | PK `id`, UNIQUE FK `message_id`, `device_id` |
 | `domain_location` | 공통 위치 파생(messageCode 무관, 등록 단말) | PK `id`, UNIQUE FK `message_id`, `device_id` |
+| `domain_generic` | 범용 업무 파생(catch-all). 전용 파서 없는 코드의 message 본문 JSONB | PK `id`, UNIQUE FK `message_id`, `device_id`, `data` |
 | `error_log` | 단계별 오류 추적 | PK `id`, 참조 `message_id`/`message_key`, `stage` |
 
 - 모든 테이블은 생성일시 `created_at TIMESTAMPTZ NOT NULL DEFAULT now()` 보유.
@@ -172,7 +174,7 @@ DATABASE_URL=postgres://postgres:pw@localhost:5432/agent \
 
 ### 새 업무(messageCode) 추가 절차 — 개방-폐쇄
 
-기존 코드를 수정하지 않고 **추가만** 한다:
+전용 파서가 없으면 자동으로 `domain_generic`(JSONB)에 저장된다(catch-all). 전용 테이블이 필요한 코드만 아래 절차로 추가한다(기존 코드 미수정, 추가만):
 
 1. **테이블:** `src/db/schema.sql`에 `domain_<code>` 추가 (`id BIGSERIAL PK`, `message_id BIGINT UNIQUE FK`, `device_id BIGINT NOT NULL`, 업무 컬럼, `created_at`, 코멘트).
 2. **Repo:** 해당 테이블 INSERT 메서드 (`domainRepo`에 추가 또는 전용 repo).

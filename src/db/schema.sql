@@ -81,6 +81,25 @@ COMMENT ON COLUMN domain_location.latitude   IS '위도';
 COMMENT ON COLUMN domain_location.longitude  IS '경도';
 COMMENT ON COLUMN domain_location.created_at IS '생성일시';
 
+-- 범용 업무 테이블 (catch-all). Fault 등 전용 파서가 없는 모든 messageCode의 message 본문을 JSONB로 저장.
+CREATE TABLE IF NOT EXISTS domain_generic (
+  id           BIGSERIAL PRIMARY KEY,
+  message_id   BIGINT NOT NULL UNIQUE REFERENCES messages_raw(message_id),
+  device_id    BIGINT NOT NULL REFERENCES devices(device_id),
+  message_code TEXT NOT NULL,
+  data         JSONB NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_generic_device ON domain_generic (device_id);
+CREATE INDEX IF NOT EXISTS idx_generic_code   ON domain_generic (message_code);
+COMMENT ON TABLE  domain_generic              IS '범용 업무 파생 테이블(catch-all): 전용 파서 없는 messageCode의 message 본문(키:값)을 JSONB로 저장';
+COMMENT ON COLUMN domain_generic.id           IS '업무단 자체 시퀀스 PK';
+COMMENT ON COLUMN domain_generic.message_id   IS '원본(messages_raw.message_id) 참조용 보관 (UNIQUE, 멱등)';
+COMMENT ON COLUMN domain_generic.device_id    IS '단말 식별 (단말별 조회용)';
+COMMENT ON COLUMN domain_generic.message_code IS '업무 구분자';
+COMMENT ON COLUMN domain_generic.data         IS 'message 본문(키:값) JSONB';
+COMMENT ON COLUMN domain_generic.created_at   IS '생성일시';
+
 -- 전용 에러 테이블 — 단계별 오류 추적
 CREATE TABLE IF NOT EXISTS error_log (
   id           BIGSERIAL PRIMARY KEY,
