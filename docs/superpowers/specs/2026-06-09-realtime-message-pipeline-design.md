@@ -112,7 +112,8 @@ src/
 | LocationRepo | domain_location INSERT(멱등, device_id 포함) |
 | ErrorRepo | error_log 기록 (stage, message_id, detail, raw_text) |
 | ParserRegistry / DomainParser | messageCode → 파서. `insert(repo, messageId, deviceId, parsed)`. 새 업무 = 파서+테이블 추가(개방-폐쇄) |
-| ProjectionService | raw → 도메인 파생(device_id 전파), parse_error 격리 + 에러 기록 |
+| DomainRepo/GenericRepo | 전용 도메인 테이블 / 범용(domain_generic JSONB) INSERT |
+| ProjectionService | raw → 분기 파생(전용 파서=Fault, 그 외 catch-all=domain_generic) + parse_error 격리 |
 | LocationProjector | lat/lon 있으면 domain_location 저장(messageCode 무관, 등록 단말만) |
 | MessageProcessor | 수신 1건의 전 단계 오케스트레이션 + 단계별 에러 기록 + ack 신호 |
 
@@ -140,9 +141,11 @@ src/
         └ device_id 있음 →
              ├ 위치 projection: lat/lon 있으면 domain_location(device_id) 저장
              │   └ 실패 → error_log(stage=location)
-             └ messageCode 파서 projection: domain_<code>(device_id) 저장
-                 ├ 성공 → status='parsed'
-                 └ 미등록 코드/실패 → status='parse_error' + error_log(stage=projection)
+             └ messageCode projection:
+                  ├ 전용 파서 있음(Fault) → domain_<code>(device_id) 저장
+                  ├ 없음(catch-all) → domain_generic(message 본문 JSONB) 저장
+                  ├ 성공 → status='parsed'
+                  └ 실제 파싱/저장 예외 → status='parse_error' + error_log(stage=projection)
 ```
 
 **불변식:** 원본 저장(=ack) 이후 단계가 모두 실패해도 원본과 에러 기록은 남는다. PG 자체 장애만이 재전송을 유발하며, 그 경우에도 무손실이 유지된다.
@@ -203,7 +206,16 @@ CREATE TABLE domain_location (
   latitude NUMERIC, longitude NUMERIC,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- domain_<다른업무코드> ... 동일 패턴 (자체 id PK + message_id UNIQUE FK + device_id NOT NULL).
+-- 범용 업무 테이블 (catch-all). 전용 파서 없는 모든 messageCode의 message 본문을 JSONB로.
+CREATE TABLE domain_generic (
+  id           BIGSERIAL PRIMARY KEY,
+  message_id   BIGINT NOT NULL UNIQUE REFERENCES messages_raw(message_id),
+  device_id    BIGINT NOT NULL REFERENCES devices(device_id),
+  message_code TEXT NOT NULL,
+  data         JSONB NOT NULL,             -- message 본문(키:값)
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- domain_<다른업무코드> ... 전용 테이블 패턴 (자체 id PK + message_id UNIQUE FK + device_id NOT NULL).
 
 -- 전용 에러 테이블 — 단계별 오류 추적
 CREATE TABLE error_log (
@@ -248,7 +260,8 @@ WHERE r.message_id = $1;
 | messages_raw INSERT 실패(PG 다운) | ack 안 함 → broker 재전송 | ✅ |
 | 중복(message_key) | ON CONFLICT (message_key)로 흡수, ack | ✅ (무중복) |
 | 미등록 imei | 원본 저장됨. status=unregistered_device + error_log(device_lookup). **도메인·위치 저장 안 함**. 단말 등록 후 재처리 | ✅ (원본 보존) |
-| 미등록 코드/파싱 실패 | 원본 저장됨. status=parse_error + error_log(projection). 파서 수정 후 재처리 | ✅ (원본 보존) |
+| 전용 파서 없는 코드 | catch-all로 domain_generic(JSONB) 저장, status=parsed (오류 아님) | ✅ |
+| 파싱/저장 실제 예외 | 원본 저장됨. status=parse_error + error_log(projection). 수정 후 재처리 | ✅ (원본 보존) |
 | 위치 저장 실패 | 원본 저장됨. error_log(location). 비치명(파서 projection은 계속) | ✅ (원본 보존) |
 
 ### 6.2 재처리

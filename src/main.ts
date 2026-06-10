@@ -6,6 +6,7 @@ import { RawRepo } from './repo/rawRepo.js';
 import { DomainRepo } from './repo/domainRepo.js';
 import { ErrorRepo } from './repo/errorRepo.js';
 import { LocationRepo } from './repo/locationRepo.js';
+import { GenericRepo } from './repo/genericRepo.js';
 import { defaultRegistry } from './parsers/registry.js';
 import { ProjectionService } from './service/projectionService.js';
 import { LocationProjector } from './service/locationProjector.js';
@@ -21,7 +22,7 @@ async function main(): Promise<void> {
   const deviceRepo = new DeviceRepo(pool);
   const rawRepo = new RawRepo(pool);
   const errorRepo = new ErrorRepo(pool);
-  const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo);
+  const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo, new GenericRepo(pool));
   const location = new LocationProjector(new LocationRepo(pool), errorRepo);
   const processor = new MessageProcessor(deviceRepo, rawRepo, projection, location, errorRepo, systemClock);
 

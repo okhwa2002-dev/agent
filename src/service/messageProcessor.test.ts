@@ -8,6 +8,7 @@ import { RawRepo } from '../repo/rawRepo.js';
 import { DomainRepo } from '../repo/domainRepo.js';
 import { ErrorRepo } from '../repo/errorRepo.js';
 import { LocationRepo } from '../repo/locationRepo.js';
+import { GenericRepo } from '../repo/genericRepo.js';
 import { defaultRegistry } from '../parsers/registry.js';
 import { ProjectionService } from './projectionService.js';
 import { LocationProjector } from './locationProjector.js';
@@ -30,7 +31,7 @@ beforeAll(async () => {
   deviceId = await deviceRepo.register('imei-ok');
   const rawRepo = new RawRepo(pool);
   const errorRepo = new ErrorRepo(pool);
-  const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo);
+  const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo, new GenericRepo(pool));
   const location = new LocationProjector(new LocationRepo(pool), errorRepo);
   proc = new MessageProcessor(deviceRepo, rawRepo, projection, location, errorRepo, clock);
 });
@@ -69,6 +70,15 @@ describe('MessageProcessor', () => {
     expect(e.rows[0].stage).toBe('device_lookup');
     const loc = await pool.query('SELECT 1 FROM domain_location WHERE message_id=$1', [raw.rows[0].message_id]);
     expect(loc.rowCount).toBe(0);
+  });
+
+  it('Fault 외 코드(Sensor) → domain_generic에 JSONB 저장', async () => {
+    await proc.handle('device/dev/msg', buf({ imei: 'imei-ok', messageCode: 'Sensor', message: { temp: '25', hum: '60' } }));
+    const raw = await pool.query("SELECT message_id FROM messages_raw WHERE message_code='Sensor'");
+    const g = await pool.query('SELECT data, message_code, device_id FROM domain_generic WHERE message_id=$1', [raw.rows[0].message_id]);
+    expect(g.rows[0].message_code).toBe('Sensor');
+    expect(g.rows[0].data).toEqual({ temp: '25', hum: '60' });
+    expect(g.rows[0].device_id).toBe(deviceId);
   });
 
   it('JSON 파싱 실패 → error_log(ingest), 원본 미저장', async () => {
