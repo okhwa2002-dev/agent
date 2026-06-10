@@ -10,6 +10,7 @@
     "pub": "node scripts/pub.mjs"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "mqtt": "^5.10.1",
     "pg": "^8.13.0"
   },

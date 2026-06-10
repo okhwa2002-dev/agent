@@ -136,6 +136,10 @@ src/
 
 ## 5. 실행 방법
 
+### 환경변수 (.env)
+
+`.env.example`을 `.env`로 복사해 값을 채우면 `import 'dotenv/config'`로 자동 로드된다(`main.ts`). `.env`는 gitignore. 또는 셸에서 직접 `$env:DATABASE_URL=...`(PowerShell) 지정도 가능.
+
 ### 설치 / 빌드 / 테스트
 ```bash
 npm install

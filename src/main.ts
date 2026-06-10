@@ -1,3 +1,4 @@
+import 'dotenv/config'; // 프로젝트 루트 .env 로드 (loadConfig보다 먼저)
 import { loadConfig } from './config/config.js';
 import { createPool } from './db/pool.js';
 import { applySchema } from './db/applySchema.js';
