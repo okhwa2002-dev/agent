@@ -43,9 +43,10 @@ afterAll(async () => {
 describe('MessageProcessor', () => {
   it('등록 단말: raw + device_id 매핑 + 도메인/위치 파생', async () => {
     await proc.handle('device/dev/msg', buf(msg('imei-ok')));
-    const raw = await pool.query('SELECT message_id, device_id, status FROM messages_raw WHERE device_id=$1', [deviceId]);
+    const raw = await pool.query('SELECT message_id, device_id, imei, status FROM messages_raw WHERE device_id=$1', [deviceId]);
     const row = raw.rows[0];
     expect(row.status).toBe('parsed');
+    expect(row.imei).toBe('imei-ok');
     const dom = await pool.query('SELECT pcode, device_id FROM domain_fault WHERE message_id=$1', [row.message_id]);
     expect(dom.rows[0].pcode).toBe('P0001');
     expect(dom.rows[0].device_id).toBe(deviceId);
@@ -61,8 +62,9 @@ describe('MessageProcessor', () => {
 
   it('미등록 imei → unregistered_device + error_log(device_lookup), 도메인/위치 없음', async () => {
     await proc.handle('device/dev/msg', buf(msg('imei-unknown')));
-    const raw = await pool.query("SELECT message_id, device_id FROM messages_raw WHERE status='unregistered_device'");
+    const raw = await pool.query("SELECT message_id, device_id, imei FROM messages_raw WHERE status='unregistered_device'");
     expect(raw.rows[0].device_id).toBeNull();
+    expect(raw.rows[0].imei).toBe('imei-unknown'); // 미등록도 imei로 추적 가능
     const e = await pool.query('SELECT stage FROM error_log WHERE message_id=$1', [raw.rows[0].message_id]);
     expect(e.rows[0].stage).toBe('device_lookup');
     const loc = await pool.query('SELECT 1 FROM domain_location WHERE message_id=$1', [raw.rows[0].message_id]);

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS messages_raw (
   message_id    BIGSERIAL PRIMARY KEY,
   message_key   TEXT NOT NULL UNIQUE,
   device_id     BIGINT REFERENCES devices(device_id),
+  imei          TEXT,
   message_code  TEXT NOT NULL,
   process_dttm  TIMESTAMPTZ,
   latitude      NUMERIC,
@@ -26,10 +27,12 @@ CREATE TABLE IF NOT EXISTS messages_raw (
 CREATE INDEX IF NOT EXISTS idx_raw_status ON messages_raw (status) WHERE status <> 'parsed';
 CREATE INDEX IF NOT EXISTS idx_raw_code   ON messages_raw (message_code, received_at);
 CREATE INDEX IF NOT EXISTS idx_raw_device ON messages_raw (device_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_raw_imei   ON messages_raw (imei, received_at);
 COMMENT ON TABLE  messages_raw              IS '원본 적재 테이블(불변): 단말 원본 JSON + 공통 헤더. 전 계층 추적 기준';
 COMMENT ON COLUMN messages_raw.message_id   IS '숫자 surrogate PK = 도메인/에러 테이블 매핑 키';
 COMMENT ON COLUMN messages_raw.message_key  IS '멱등 키 (에이전트 결정적 생성, 재전송 중복 흡수)';
 COMMENT ON COLUMN messages_raw.device_id    IS 'imei 조회 결과. 미등록 단말이면 NULL';
+COMMENT ON COLUMN messages_raw.imei         IS '단말 하드웨어 식별자 (payload에서 추출, 미등록 추적용)';
 COMMENT ON COLUMN messages_raw.message_code IS '업무 라우팅 구분자 (예: Fault)';
 COMMENT ON COLUMN messages_raw.process_dttm IS '단말 처리 시각 (payload)';
 COMMENT ON COLUMN messages_raw.latitude     IS '공통 위치 - 위도 (payload)';

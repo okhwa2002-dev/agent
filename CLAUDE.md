@@ -70,7 +70,7 @@
 | 테이블 | 역할 | 키 |
 |---|---|---|
 | `devices` | 단말 마스터. `device_id` ↔ `imei` 매핑 | PK `device_id`(BIGSERIAL), UNIQUE `imei` |
-| `messages_raw` | 원본 적재(불변, bronze). 원본 JSON + 공통 헤더 | PK `message_id`(BIGSERIAL), UNIQUE `message_key`(멱등), FK `device_id` |
+| `messages_raw` | 원본 적재(불변, bronze). 원본 JSON + 공통 헤더(imei/process_dttm/lat/lon) | PK `message_id`(BIGSERIAL), UNIQUE `message_key`(멱등), FK `device_id`, `imei`(추적) |
 | `domain_fault` | 업무(고장) 파생. `message.{ftp,sp,pcode}` | PK `id`, UNIQUE FK `message_id`, `device_id` |
 | `domain_location` | 공통 위치 파생(messageCode 무관, 등록 단말) | PK `id`, UNIQUE FK `message_id`, `device_id` |
 | `error_log` | 단계별 오류 추적 | PK `id`, 참조 `message_id`/`message_key`, `stage` |

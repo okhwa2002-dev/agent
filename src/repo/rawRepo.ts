@@ -19,12 +19,12 @@ export class RawRepo {
   async insert(r: RawInsert): Promise<string | null> {
     const res = await this.pool.query<{ message_id: string }>(
       `INSERT INTO messages_raw
-         (message_key, device_id, message_code, process_dttm, latitude, longitude, raw_payload, status, received_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         (message_key, device_id, imei, message_code, process_dttm, latitude, longitude, raw_payload, status, received_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (message_key) DO NOTHING
        RETURNING message_id`,
       [
-        r.messageKey, r.deviceId, r.header.messageCode,
+        r.messageKey, r.deviceId, r.header.imei, r.header.messageCode,
         r.header.processDttm, r.header.latitude, r.header.longitude,
         JSON.stringify(r.rawPayload), r.status, r.receivedAt,
       ],
