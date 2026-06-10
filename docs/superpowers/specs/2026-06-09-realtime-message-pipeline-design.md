@@ -112,7 +112,7 @@ src/
 | LocationRepo | domain_location INSERT(멱등, device_id 포함) |
 | ErrorRepo | error_log 기록 (stage, message_id, detail, raw_text) |
 | ParserRegistry / DomainParser | messageCode → 파서. `insert(repo, messageId, deviceId, parsed)`. 새 업무 = 파서+테이블 추가(개방-폐쇄) |
-| DomainRepo/GenericRepo | 전용 도메인 테이블 / 범용(domain_generic JSONB) INSERT |
+| DomainRepo/GenericRepo | 전용 도메인 테이블 / 범용(domain_generic EAV, 키별 행) INSERT |
 | ProjectionService | raw → 분기 파생(전용 파서=Fault, 그 외 catch-all=domain_generic) + parse_error 격리 |
 | LocationProjector | lat/lon 있으면 domain_location 저장(messageCode 무관, 등록 단말만) |
 | MessageProcessor | 수신 1건의 전 단계 오케스트레이션 + 단계별 에러 기록 + ack 신호 |
@@ -143,7 +143,7 @@ src/
              │   └ 실패 → error_log(stage=location)
              └ messageCode projection:
                   ├ 전용 파서 있음(Fault) → domain_<code>(device_id) 저장
-                  ├ 없음(catch-all) → domain_generic(message 본문 JSONB) 저장
+                  ├ 없음(catch-all) → 본문 키마다 domain_generic에 한 행씩(EAV) 저장
                   ├ 성공 → status='parsed'
                   └ 실제 파싱/저장 예외 → status='parse_error' + error_log(stage=projection)
 ```
@@ -206,15 +206,19 @@ CREATE TABLE domain_location (
   latitude NUMERIC, longitude NUMERIC,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- 범용 업무 테이블 (catch-all). 전용 파서 없는 모든 messageCode의 message 본문을 JSONB로.
+-- 범용 업무 테이블 (catch-all, EAV). 전용 파서 없는 코드의 본문을 키마다 한 행씩 저장.
 CREATE TABLE domain_generic (
   id           BIGSERIAL PRIMARY KEY,
-  message_id   BIGINT NOT NULL UNIQUE REFERENCES messages_raw(message_id),
+  message_id   BIGINT NOT NULL REFERENCES messages_raw(message_id),
   device_id    BIGINT NOT NULL REFERENCES devices(device_id),
   message_code TEXT NOT NULL,
-  data         JSONB NOT NULL,             -- message 본문(키:값)
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  key          TEXT NOT NULL,             -- 업무 본문 키
+  value        TEXT,                       -- 값(객체면 JSON 문자열)
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (message_id, key)                 -- 재처리 멱등
 );
+
+-- 업무 본문 추출: rawPayload.message(중첩)가 있으면 그것, 없으면 공통 5키 제외한 최상위(평면).
 -- domain_<다른업무코드> ... 전용 테이블 패턴 (자체 id PK + message_id UNIQUE FK + device_id NOT NULL).
 
 -- 전용 에러 테이블 — 단계별 오류 추적
@@ -260,7 +264,7 @@ WHERE r.message_id = $1;
 | messages_raw INSERT 실패(PG 다운) | ack 안 함 → broker 재전송 | ✅ |
 | 중복(message_key) | ON CONFLICT (message_key)로 흡수, ack | ✅ (무중복) |
 | 미등록 imei | 원본 저장됨. status=unregistered_device + error_log(device_lookup). **도메인·위치 저장 안 함**. 단말 등록 후 재처리 | ✅ (원본 보존) |
-| 전용 파서 없는 코드 | catch-all로 domain_generic(JSONB) 저장, status=parsed (오류 아님) | ✅ |
+| 전용 파서 없는 코드 | catch-all로 domain_generic(키별 행, EAV) 저장, status=parsed (오류 아님) | ✅ |
 | 파싱/저장 실제 예외 | 원본 저장됨. status=parse_error + error_log(projection). 수정 후 재처리 | ✅ (원본 보존) |
 | 위치 저장 실패 | 원본 저장됨. error_log(location). 비치명(파서 projection은 계속) | ✅ (원본 보존) |
 
