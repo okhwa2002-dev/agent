@@ -1,4 +1,5 @@
-import 'dotenv/config'; // 프로젝트 루트 .env 로드 (loadConfig보다 먼저)
+import 'dotenv/config'; // 프로젝트 루트 .env 로드 (loadConfig·logger보다 먼저)
+import { logger } from './logger.js';
 import { loadConfig } from './config/config.js';
 import { createPool } from './db/pool.js';
 import { applySchema } from './db/applySchema.js';
@@ -32,12 +33,12 @@ async function main(): Promise<void> {
     (topic, payload) => processor.handle(topic, payload),
   );
   await subscriber.start();
-  console.log(JSON.stringify({ level: 'info', msg: 'agent started', clientId: cfg.mqttClientId }));
+  logger.info({ msg: 'agent started', clientId: cfg.mqttClientId });
 
   const shutdown = async () => {
     await subscriber.stop();
     await pool.end();
-    console.log(JSON.stringify({ level: 'info', msg: 'agent stopped' }));
+    logger.info({ msg: 'agent stopped' });
     process.exit(0);
   };
   process.on('SIGTERM', () => void shutdown());
@@ -45,6 +46,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(JSON.stringify({ level: 'fatal', err: String(err) }));
+  logger.fatal({ err: String(err) });
   process.exit(1);
 });

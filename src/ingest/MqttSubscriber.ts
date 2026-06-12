@@ -1,5 +1,6 @@
 import mqtt, { type MqttClient } from 'mqtt';
 import type { IPublishPacket } from 'mqtt-packet';
+import { logger } from '../logger.js';
 
 /** 메시지 처리기: 정상 반환=ack, throw=ack 안 함(재전송 유도). */
 export type Handler = (topic: string, payload: Buffer) => Promise<void>;
@@ -35,7 +36,7 @@ export class MqttSubscriber {
       this.handler(packet.topic, packet.payload as Buffer)
         .then(() => cb())
         .catch((err: unknown) => {
-          console.error(JSON.stringify({ level: 'error', msg: 'process failed (will redeliver)', err: String(err) }));
+          logger.error({ msg: 'process failed (will redeliver)', err: String(err) });
           cb(err instanceof Error ? err : new Error(String(err)));
         });
     };
