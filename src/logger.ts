@@ -71,6 +71,6 @@ export function createLogger(dir: string, opts: LoggerOptions = {}): Logger {
   };
 }
 
-/** 앱 전역 로거. 위치는 LOG_DIR 환경변수, 기본 D:\workspace\ok2020\log */
-const DEFAULT_LOG_DIR = process.env.LOG_DIR ?? 'D:\\workspace\\ok2020\\log';
+/** 앱 전역 로거. 위치는 LOG_DIR 환경변수(.env), 미설정 시 ./logs(실행 cwd 기준). */
+const DEFAULT_LOG_DIR = process.env.LOG_DIR ?? 'logs';
 export const logger = createLogger(DEFAULT_LOG_DIR, { autoRotateMs: 60_000 });

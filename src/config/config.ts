@@ -4,6 +4,8 @@ export interface AppConfig {
   mqttTopic: string;
   mqttClientId: string;
   qos: 0 | 1 | 2;
+  redisUrl: string;
+  workerConcurrency: number;
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -19,5 +21,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     mqttTopic: required(env, 'MQTT_TOPIC'),
     mqttClientId: env.MQTT_CLIENT_ID ?? 'edge-agent',
     qos: 1,
+    redisUrl: required(env, 'REDIS_URL'),
+    workerConcurrency: Number(env.WORKER_CONCURRENCY ?? '4'),
   };
 }

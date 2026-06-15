@@ -11,11 +11,13 @@
   },
   "dependencies": {
     "dotenv": "^17.4.2",
+    "ioredis": "^5.11.1",
     "mqtt": "^5.10.1",
     "pg": "^8.13.0"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^10.13.2",
+    "@testcontainers/redis": "^12.0.2",
     "@types/node": "^20.16.5",
     "@types/pg": "^8.11.10",
     "typescript": "^5.6.2",
