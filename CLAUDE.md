@@ -5,6 +5,7 @@
 - 설계 문서: [docs/superpowers/specs/2026-06-09-realtime-message-pipeline-design.md](docs/superpowers/specs/2026-06-09-realtime-message-pipeline-design.md)
 - 구현 계획: [docs/superpowers/plans/](docs/superpowers/plans/)
 - MQTT 발행·테스트 사용법: [docs/mqtt-usage.md](docs/mqtt-usage.md)
+- 부하 테스트 보고서: [docs/load-test-report.md](docs/load-test-report.md)
 
 ---
 
