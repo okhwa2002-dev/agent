@@ -7,6 +7,8 @@ services:
       - "9001:9001"
     volumes:
       - ./docker/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/mosquitto/config/passwd:/mosquitto/config/passwd:ro
+      - ./docker/mosquitto/config/acl:/mosquitto/config/acl:ro
       - mosquitto-data:/mosquitto/data
     restart: unless-stopped
 
@@ -15,10 +17,10 @@ services:
     container_name: agent-postgres
     environment:
       POSTGRES_USER: agent
-      POSTGRES_PASSWORD: agentpw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentpw} # 운영: .env로 주입
       POSTGRES_DB: agent_db
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432" # 로컬 전용 — 단말이 접근할 포트는 MQTT뿐
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -31,14 +33,41 @@ services:
   redis:
     image: redis:7-alpine
     container_name: agent-redis
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${REDIS_PASSWORD:-agentredispw}"] # 운영: .env로 주입
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379" # 로컬 전용
     volumes:
       - redis-data:/data
     restart: unless-stopped
+
+  # 에이전트 컨테이너 실행(선택): docker compose --profile agent up -d --build
+  # 로컬 개발(npm start)과 병행하지 말 것 — 같은 MQTT_CLIENT_ID/9100 포트 충돌.
+  agent:
+    build: .
+    container_name: edge-agent
+    profiles: ["agent"]
+    environment:
+      DATABASE_URL: postgres://agent:${POSTGRES_PASSWORD:-agentpw}@postgres:5432/agent_db
+      MQTT_URL: mqtt://agent:${MQTT_PASSWORD:-agentmqttpw}@mosquitto:1883
+      MQTT_TOPIC: device/+/msg
+      REDIS_URL: redis://:${REDIS_PASSWORD:-agentredispw}@redis:6379
+      LOG_DIR: /app/logs
+      METRICS_HOST: 0.0.0.0 # 컨테이너 밖(호스트 127.0.0.1)으로 publish하기 위해 컨테이너 안에서는 전체 바인드
+    ports:
+      - "127.0.0.1:9100:9100" # 로컬 전용 — 지표/헬스는 외부 비공개
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mosquitto:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - agent-logs:/app/logs
 
 volumes:
   mosquitto-data:
   postgres-data:
   redis-data:
+  agent-logs:

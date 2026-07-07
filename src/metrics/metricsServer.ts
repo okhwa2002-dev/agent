@@ -15,6 +15,7 @@ export class MetricsServer {
   constructor(
     private readonly source: StatsSource,
     private readonly port: number,
+    private readonly host: string = '0.0.0.0', // 운영 기본은 config에서 127.0.0.1로 제한
   ) {}
 
   /** 리슨 시작. 실제 바인딩된 포트를 반환(테스트에서 port 0 사용). */
@@ -23,7 +24,7 @@ export class MetricsServer {
     this.server = server;
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
-      server.listen(this.port, () => resolve());
+      server.listen(this.port, this.host, () => resolve());
     });
     const addr = server.address();
     return typeof addr === 'object' && addr != null ? addr.port : this.port;

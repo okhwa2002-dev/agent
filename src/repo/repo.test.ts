@@ -39,6 +39,15 @@ describe('repositories', () => {
     expect(await repo.findDeviceIdByImei('000')).toBeNull();
   });
 
+  it('deviceRepo: list는 등록 단말 목록을 반환한다', async () => {
+    const repo = new DeviceRepo(pool);
+    const id = await repo.register('imei-list-1');
+    const rows = await repo.list();
+    const row = rows.find((r) => r.imei === 'imei-list-1');
+    expect(row?.deviceId).toBe(id);
+    expect(row?.createdAt).toBeTruthy();
+  });
+
   it('rawRepo: 신규는 message_id 반환, 중복(message_key)은 null + markStatus', async () => {
     const repo = new RawRepo(pool);
     const base = { deviceId: null, header, rawPayload: { messageCode: 'Fault' }, errorYn: 'N' as const, errorDetail: null, receivedAt: '2026-06-09T09:03:00.000Z' };

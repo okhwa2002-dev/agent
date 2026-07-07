@@ -1,0 +1,11 @@
+# 토픽 접근 제어 (acl_file). 명시되지 않은 접근은 전부 거부.
+
+# 에이전트/운영자 계정: 단말 토픽 구독 + (테스트 발행 포함) 발행 허용
+user agent
+topic readwrite device/+/msg
+
+# 단말 공용 계정: 아래 pattern으로 자기 clientId 토픽에만 발행 가능
+user device
+
+# 모든 계정 공통: 자기 clientId와 일치하는 토픽 세그먼트에만 발행 (스푸핑 방지)
+pattern write device/%c/msg

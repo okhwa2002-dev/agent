@@ -56,7 +56,7 @@ async function main(): Promise<void> {
       { redis, pool, rawRepo, errorRepo, isMqttConnected: () => subscriber.isConnected() },
       { stream: 'messages:stream', group: 'agent-workers', dlqStream: 'messages:dlq' },
     );
-    metrics = new MetricsServer(collector, cfg.metricsPort);
+    metrics = new MetricsServer(collector, cfg.metricsPort, cfg.metricsHost);
     await metrics.start();
   }
   logger.info({ msg: 'agent started', clientId: cfg.mqttClientId, workers: cfg.workerConcurrency, metricsPort: cfg.metricsPort });

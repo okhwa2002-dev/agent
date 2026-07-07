@@ -20,6 +20,7 @@
 //   node scripts/pub.mjs '{"imei":"111222333","messageCode":"Fault","message":{"ftp":"1"}}'
 //   node scripts/pub.mjs sensor --count 5
 
+import 'dotenv/config'; // .env의 MQTT_URL(브로커 인증 포함) 자동 로드
 import mqtt from 'mqtt';
 
 // ---- 인자 파싱 ----

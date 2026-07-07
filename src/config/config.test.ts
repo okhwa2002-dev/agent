@@ -27,4 +27,13 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...base, METRICS_PORT: '9200' }).metricsPort).toBe(9200);
     expect(loadConfig({ ...base, METRICS_PORT: '0' }).metricsPort).toBe(0);
   });
+
+  it('METRICS_HOST 기본은 127.0.0.1(로컬 전용), 지정 시 그대로', () => {
+    const base = {
+      DATABASE_URL: 'postgres://localhost/db', MQTT_URL: 'mqtt://localhost:1883', MQTT_TOPIC: 'device/+/msg',
+      REDIS_URL: 'redis://localhost:6379',
+    };
+    expect(loadConfig(base).metricsHost).toBe('127.0.0.1');
+    expect(loadConfig({ ...base, METRICS_HOST: '0.0.0.0' }).metricsHost).toBe('0.0.0.0');
+  });
 });

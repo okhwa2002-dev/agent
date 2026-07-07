@@ -17,4 +17,11 @@ export class DeviceRepo {
     const res = await this.pool.query<{ device_id: string }>(text, values);
     return res.rows[0].device_id;
   }
+
+  /** 등록 단말 목록(운영 CLI용). */
+  async list(): Promise<{ deviceId: string; imei: string; createdAt: string }[]> {
+    const { text, values } = getQuery('device', 'list');
+    const res = await this.pool.query<{ device_id: string; imei: string; created_at: string }>(text, values);
+    return res.rows.map((r) => ({ deviceId: r.device_id, imei: r.imei, createdAt: String(r.created_at) }));
+  }
 }

@@ -58,4 +58,15 @@ describe('ProjectionService', () => {
     ]);
     expect((await pool.query('SELECT error_yn FROM messages_raw WHERE message_id=$1', [mid])).rows[0].error_yn).toBe('N');
   });
+
+  it('catch-all 본문 키 수가 상한(200)을 넘으면 저장하지 않고 error_yn=Y + error_log(projection)', async () => {
+    const huge: Record<string, string> = { messageCode: 'Bulk' };
+    for (let i = 0; i < 201; i++) huge[`k${i}`] = String(i); // 본문 키 201개 (공통 키 제외)
+    const mid = await seed('pk-3', 'Bulk', huge);
+    await svc.project(mid, deviceId, 'Bulk', huge);
+    expect((await pool.query('SELECT count(*)::int AS c FROM domain_generic WHERE message_id=$1', [mid])).rows[0].c).toBe(0);
+    expect((await pool.query('SELECT error_yn FROM messages_raw WHERE message_id=$1', [mid])).rows[0].error_yn).toBe('Y');
+    const e = await pool.query("SELECT detail FROM error_log WHERE message_id=$1 AND stage='projection'", [mid]);
+    expect(e.rows[0].detail).toContain('200');
+  });
 });

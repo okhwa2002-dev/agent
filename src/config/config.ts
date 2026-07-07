@@ -7,6 +7,7 @@ export interface AppConfig {
   redisUrl: string;
   workerConcurrency: number;
   metricsPort: number;      // /health,/metrics HTTP 포트 (0=비활성)
+  metricsHost: string;      // 바인드 주소 (기본 127.0.0.1=로컬 전용, 컨테이너는 0.0.0.0)
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -25,5 +26,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     redisUrl: required(env, 'REDIS_URL'),
     workerConcurrency: Number(env.WORKER_CONCURRENCY ?? '4'),
     metricsPort: Number(env.METRICS_PORT ?? '9100'),
+    metricsHost: env.METRICS_HOST ?? '127.0.0.1',
   };
 }

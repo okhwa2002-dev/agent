@@ -7,6 +7,7 @@
 // 각 메시지는 고유 seq를 가져 message_key가 모두 달라 N건이 모두 별개로 저장된다.
 // (검증: messages_raw 에서 해당 imei 건수 == count, 중복/에러 0 인지 psql로 확인)
 
+import 'dotenv/config'; // .env의 MQTT_URL(브로커 인증 포함) 자동 로드
 import mqtt from 'mqtt';
 
 const a = process.argv.slice(2);

@@ -11,6 +11,9 @@ import { extractBusinessBody } from '../header.js';
  * - 없음(catch-all) → domain_generic에 본문 키마다 한 행씩(EAV) 저장
  * 실제 파싱/저장 예외 시에만 status=parse_error + error_log.
  */
+/** catch-all(EAV) 본문 키 수 상한 — 대형 payload 한 건이 행 폭주를 일으키는 것을 방지. */
+const MAX_GENERIC_KEYS = 200;
+
 export class ProjectionService {
   constructor(
     private readonly registry: ParserRegistry,
@@ -29,6 +32,10 @@ export class ProjectionService {
       } else {
         // catch-all: 본문(키:값) 추출(평면/중첩 통일) → 키마다 한 행씩 저장
         const body = extractBusinessBody(rawPayload);
+        const keyCount = Object.keys(body).length;
+        if (keyCount > MAX_GENERIC_KEYS) {
+          throw new Error(`generic body too large: ${keyCount} keys > ${MAX_GENERIC_KEYS}`);
+        }
         await this.genericRepo.insertMany(messageId, deviceId, body);
       }
       // 성공: error_yn은 INSERT 시 'N' 그대로 유지 (별도 작업 없음)

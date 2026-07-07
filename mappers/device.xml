@@ -11,4 +11,8 @@
     RETURNING device_id
   </insert>
 
+  <select id="list">
+    SELECT device_id, imei, created_at FROM devices ORDER BY device_id
+  </select>
+
 </mapper>

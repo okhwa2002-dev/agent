@@ -1,0 +1,9 @@
+node_modules
+dist
+logs
+.env
+.git
+docs
+docker
+scripts
+*.test.ts
