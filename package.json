@@ -8,6 +8,8 @@
     "test:watch": "vitest",
     "start": "node dist/main.js",
     "reprocess": "node dist/reprocess.js",
+    "dlq": "node dist/dlq.js",
+    "device": "node dist/device.js",
     "pub": "node scripts/pub.mjs"
   },
   "dependencies": {
@@ -21,6 +23,7 @@
     "@testcontainers/redis": "^12.0.2",
     "@types/node": "^20.16.5",
     "@types/pg": "^8.11.10",
+    "testcontainers": "^12.0.4",
     "typescript": "^5.6.2",
     "vitest": "^2.1.1"
   }
