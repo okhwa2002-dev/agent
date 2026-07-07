@@ -34,4 +34,8 @@
     SELECT count(*)::int AS c FROM messages_raw WHERE error_yn = 'Y'
   </select>
 
+  <select id="findIdByKey">
+    SELECT message_id FROM messages_raw WHERE message_key = #{messageKey}
+  </select>
+
 </mapper>

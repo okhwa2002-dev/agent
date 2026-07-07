@@ -43,7 +43,16 @@ export class MessageProcessor {
       errorYn: deviceId ? 'N' : 'Y', errorDetail: unregisteredDetail,
       receivedAt: this.clock.now().toISOString(),
     });
-    if (messageId == null) return; // 중복 → ack
+    if (messageId == null) {
+      // 중복(재전송/재처리). 원본 저장 직후 크래시했다면 파생이 누락됐을 수 있어
+      // 기존 message_id로 파생을 재실행한다(도메인 INSERT는 전부 ON CONFLICT DO NOTHING → 멱등).
+      if (!deviceId) return; // 미등록은 원래 파생 없음
+      const existingId = await this.rawRepo.findIdByKey(messageKey);
+      if (existingId == null) return;
+      await this.location.project(existingId, deviceId, header);
+      await this.projection.project(existingId, deviceId, header.messageCode, payload);
+      return;
+    }
 
     if (!deviceId) {
       // 미등록 단말: 원본만 보존(error_yn=Y), 도메인/위치 저장 안 함, 추적 기록

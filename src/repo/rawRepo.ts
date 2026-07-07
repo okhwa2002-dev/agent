@@ -64,6 +64,13 @@ export class RawRepo {
     await this.pool.query(text, values);
   }
 
+  /** 멱등 키로 기존 message_id 조회(중복 재수신 시 파생 복구용). 없으면 null. */
+  async findIdByKey(messageKey: string): Promise<string | null> {
+    const { text, values } = getQuery('raw', 'findIdByKey', { messageKey });
+    const res = await this.pool.query<{ message_id: string }>(text, values);
+    return res.rows[0]?.message_id ?? null;
+  }
+
   /** 지표: error_yn='Y' 행 수. */
   async countErrors(): Promise<number> {
     const { text, values } = getQuery('raw', 'countErrors');

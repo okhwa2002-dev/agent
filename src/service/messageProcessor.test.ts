@@ -84,6 +84,32 @@ describe('MessageProcessor', () => {
     expect(g.rows[0].device_id).toBe(deviceId);
   });
 
+  it('원본만 있고 파생이 없는 중복 재수신(크래시 복구) → 파생을 멱등 재실행한다', async () => {
+    // 원본 INSERT 직후 크래시한 상황 재현: raw 행만 존재, domain_* 없음
+    const { RawRepo } = await import('../repo/rawRepo.js');
+    const { extractHeader } = await import('../header.js');
+    const { deriveMessageId } = await import('../ingest/messageId.js');
+    const payload = { ...msg('imei-ok'), message: { ftp: '1', sp: '2', pcode: 'P0099' } };
+    const rawText = JSON.stringify(payload);
+    const rawRepo = new RawRepo(pool);
+    const messageId = await rawRepo.insert({
+      messageKey: deriveMessageId('dev', payload, rawText),
+      deviceId, header: extractHeader(payload), rawPayload: payload,
+      errorYn: 'N', errorDetail: null, receivedAt: clock.now().toISOString(),
+    });
+    const before = await pool.query('SELECT 1 FROM domain_fault WHERE message_id=$1', [messageId]);
+    expect(before.rowCount).toBe(0);
+
+    await proc.handle('device/dev/msg', Buffer.from(rawText)); // 동일 message_key 재수신
+
+    const dom = await pool.query('SELECT pcode FROM domain_fault WHERE message_id=$1', [messageId]);
+    expect(dom.rows[0]?.pcode).toBe('P0099');
+    const loc = await pool.query('SELECT 1 FROM domain_location WHERE message_id=$1', [messageId]);
+    expect(loc.rowCount).toBe(1);
+    const cnt = await pool.query('SELECT count(*)::int AS c FROM messages_raw WHERE message_key=$1', [deriveMessageId('dev', payload, rawText)]);
+    expect(cnt.rows[0].c).toBe(1); // 원본은 여전히 1건(멱등)
+  });
+
   it('JSON 파싱 실패 → error_log(ingest), 원본 미저장', async () => {
     await proc.handle('device/dev/msg', Buffer.from('not-json'));
     const e = await pool.query("SELECT raw_text FROM error_log WHERE stage='ingest'");
