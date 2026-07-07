@@ -129,7 +129,7 @@ src/
 │   └── mapper.ts           # MyBatis식 XML 매퍼 로더 (#{name}→$1 + 값 바인딩)
 ├── repo/
 │   ├── deviceRepo.ts       # imei → device_id 조회/등록
-│   ├── rawRepo.ts          # messages_raw 멱등 INSERT / markError(error_yn,error_detail)
+│   ├── rawRepo.ts          # messages_raw 멱등 INSERT / markError / 재처리 조회·갱신
 │   ├── domainRepo.ts       # domain_fault INSERT
 │   ├── locationRepo.ts     # domain_location INSERT
 │   └── errorRepo.ts        # error_log 기록
@@ -140,10 +140,16 @@ src/
 ├── service/
 │   ├── projectionService.ts # raw → 도메인 파생 + 상태/에러
 │   ├── locationProjector.ts # 공통 위치 파생
-│   └── messageProcessor.ts  # 수신 1건 오케스트레이션
+│   ├── messageProcessor.ts  # 수신 1건 오케스트레이션
+│   └── reprocessService.ts  # error_yn='Y' 원본 재처리 배치(단말 등록·파서 수정 후 복구)
+├── metrics/
+│   ├── stats.ts             # AgentStats/HealthStatus + Prometheus 포매터(순수)
+│   ├── statsCollector.ts    # Redis(XLEN/XPENDING/DLQ)+PG(에러 건수) 수집, 헬스체크
+│   └── metricsServer.ts     # /health(200/503) + /metrics HTTP 서버(node:http, 무의존)
 ├── config/config.ts        # 환경설정 로드
 ├── types.ts                # RawMessage, Clock
-└── main.ts                 # 조립(DI: Redis 큐+워커풀+수신부) + graceful shutdown
+├── main.ts                 # 조립(DI: Redis 큐+워커풀+수신부) + graceful shutdown
+└── reprocess.ts            # 재처리 배치 CLI 진입점 (npm run reprocess)
 ```
 
 설계 원칙: 각 파일은 단일 책임. 파서·헤더 추출 등 변환 로직은 I/O 없는 순수 함수로 격리하여 단위 테스트 가능. `MessageProcessor`가 유일한 처리 오케스트레이터.
@@ -176,6 +182,7 @@ npm test           # vitest run (통합 테스트는 Docker 필요)
 | `MQTT_CLIENT_ID` | | `edge-agent` | clean:false durable 세션용 안정 ID |
 | `REDIS_URL` | ✅ | — | Redis 버퍼 연결 URL (예: `redis://localhost:6379`) |
 | `WORKER_CONCURRENCY` | | `4` | 처리 워커 수 K (pg 풀은 `K+4`로 생성) |
+| `METRICS_PORT` | | `9100` | 관측성 HTTP 포트 (`/health`, `/metrics`). `0`이면 비활성 |
 
 QoS는 1로 고정. 토픽은 `device/<deviceId>/...` 형식을 가정한다(두 번째 세그먼트를 보조 deviceId로 추출). 스트림/그룹/DLQ 이름은 `messages:stream` / `agent-workers` / `messages:dlq`로 고정.
 
@@ -191,6 +198,24 @@ npm run build && npm start
 기동 시 스키마가 자동 적용된다. 메시지가 처리되려면 해당 `imei`가 `devices`에 등록되어 있어야 한다(미등록은 원본+에러만 기록).
 
 **부하 테스트:** `node scripts/load.mjs --count 2000 --imei load-001 --topic device/A/msg`로 N건을 순간 발행하고, `messages_raw` 건수 == N(중복·에러 0)인지 확인한다.
+
+### 관측성 (/health, /metrics)
+
+에이전트는 `METRICS_PORT`(기본 9100)에서 HTTP 두 엔드포인트를 노출한다(`src/metrics/`).
+- **`GET /health`**: `{ok, mqtt, redis, pg}` JSON. MQTT 연결·Redis ping·PG SELECT 1 모두 정상이면 200, 하나라도 실패면 503 (liveness/readiness 프로브용).
+- **`GET /metrics`**: Prometheus 텍스트. `agent_stream_backlog`(스트림 잔량 XLEN), `agent_stream_pending`(미ack XPENDING), `agent_dlq_depth`(DLQ 적재), `agent_raw_error_rows`(error_yn='Y' 건수), `agent_error_log_total{stage=...}`(단계별 오류 건수).
+- PG 장기 다운 시 `agent_stream_backlog` 증가로 적체를 감지할 수 있다(경보 기준으로 사용 권장).
+
+### 원본 재처리 배치 (단말 등록·파서 수정 후 복구)
+
+```bash
+npm run reprocess    # DATABASE_URL만 필요 (에이전트와 별개 실행 가능)
+```
+
+`error_yn='Y'`인 `messages_raw`를 순회하며 원본(raw_payload)에서 파생을 복구한다(`src/service/reprocessService.ts`).
+- **미등록 단말 행**(device_id NULL): imei 재조회 → 등록됐으면 device_id 매핑 + 에러 해제 + 위치/업무 파생 실행. 여전히 미등록이면 건너뜀(유지).
+- **projection 실패 행**(device_id 있음): 에러 해제 후 파생 재실행(파서 수정 반영). 실패하면 기존 경로로 다시 `error_yn='Y'` → 다음 실행에서 재시도.
+- 도메인 INSERT는 전부 `ON CONFLICT DO NOTHING`이라 반복 실행해도 멱등. 완료 시 scanned/reprocessed/stillUnregistered 요약을 로그로 남긴다.
 
 ---
 
@@ -225,6 +250,9 @@ npm run build && npm start
 6. **스키마 정리:** 모든 테이블 `created_at`(생성일시) 통일 + `COMMENT ON` 코멘트를 각 테이블 아래에 정리.
 7. **부하 테스트·손실 진단:** 2000건 순간 발행 시 1040건만 저장됨을 발견. 원인은 에이전트가 아니라 **Mosquitto 브로커 송신 큐**(`max_queued_messages` 기본 1000) 오버플로. 에이전트 자체는 받은 건 100% 무손실·무중복 처리.
 8. **Redis 버퍼 재도입(폭주 흡수):** 수신부와 처리부를 **Redis Streams**로 분리. 수신 즉시 XADD→MQTT ack(브로커 큐 백업 방지), K개 워커(consumer group, 기본 4)가 PG로 병렬 드레인, 실패는 reclaim 재시도·poison은 DLQ. 더불어 브로커 `max_queued_messages 0`/`max_inflight_messages 1000` 상향. 재검증: 2000건 **전량 저장(손실 0·중복 0·에러 0)**.
+9. **DLQ 판정 버그 수정 + 원본 재처리 배치:** `reclaim`이 delivery 횟수를 2로 하드코딩해 `maxRetry` 초과 판정이 영원히 거짓(poison 무한 재시도)이던 버그를 XPENDING 실측 조회로 수정. `error_yn='Y'` 원본에서 파생을 복구하는 재처리 배치(`npm run reprocess`, §5) 추가 — 뒤늦게 등록된 단말 매핑·파서 수정 반영, 멱등.
+10. **관측성:** `/health`(MQTT·Redis·PG 상태, 200/503) + `/metrics`(Prometheus: 스트림 적체·미ack·DLQ·에러 건수) HTTP 서버 추가(`METRICS_PORT`, 기본 9100, 무의존 node:http). SIGINT/SIGTERM 중복 수신 가드도 추가.
+11. **Redis 큐 하드닝:** consumer group 시작점 `'$'`→`'0'`(그룹 재생성 시 기존 잔량 유실 방지), `ack`(XACK+XDEL)·`toDlq`(DLQ XADD+XACK+XDEL)를 MULTI로 원자화(중간 크래시 시 acked 엔트리 잔류·DLQ 중복 적재 방지).
 
 상세 단계별 계획과 코드는 `docs/superpowers/plans/`의 각 계획 문서에 기록되어 있다(Redis 버퍼: [docs/superpowers/plans/2026-06-12-redis-buffer.md](docs/superpowers/plans/2026-06-12-redis-buffer.md)).
 
@@ -233,8 +261,7 @@ npm run build && npm start
 ## 8. 향후 작업 (후보)
 
 - 추가 업무 테이블(§6 절차로 확장).
-- 미등록 단말 / `parse_error` 자동 재처리 배치(단말 등록·파서 수정 후 원본 재파싱).
-- 관측성: error_yn='Y' 건수, error_log 단계별 건수, Redis stream/DLQ 적체, end-to-end latency 지표 + `/metrics`.
+- 관측성 확장: end-to-end latency 지표, 처리 건수 카운터(throughput).
 - DLQ 운영: `messages:dlq` 적재분 조회·재처리(원인 수정 후 stream으로 재투입) 도구.
 - Redis 장애/재시작 내구성 검증(AOF 복구), 워커 수 K 튜닝 가이드.
 - E2E: `docker compose`(Mosquitto+PG+Redis) + 에이전트로 단말→DB 전 구간·폭주 무손실 자동 검증(현재 `scripts/load.mjs` 수동 검증 → CI화).

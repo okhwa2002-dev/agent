@@ -82,7 +82,7 @@ mappers/          device/raw/domain/generic/location/error .xml (SQL 분리)
 | PostgreSQL 16 | `5435`→5432 | db `agent_db`, user/pw `agent`/`agentpw` |
 
 ## 8. 로깅
-- 파일 `D:\workspace\ok2020\log\agent.log` + 콘솔 동시 출력, JSON 한 줄.
+- 파일 `D:\workspace\ok2020\log\agent\agent.log` + 콘솔 동시 출력, JSON 한 줄.
 - 일일 로테이션: 날짜가 바뀌면 `agent-YYYY-MM-DD.log`로 백업 후 새 파일(기동 시·60초 주기·기록 시 체크).
 - 타임스탬프 로컬 시간 `YYYY-MM-DD HH:mm:ss.SSS`.
 
@@ -94,7 +94,7 @@ mappers/          device/raw/domain/generic/location/error .xml (SQL 분리)
 | `MQTT_URL` | ✅ | — |
 | `MQTT_TOPIC` | ✅ | (예 `device/+/msg`) |
 | `MQTT_CLIENT_ID` | | `edge-agent` |
-| `LOG_DIR` | | `D:\workspace\ok2020\log` |
+| `LOG_DIR` | | `D:\workspace\ok2020\log\agent` |
 
 ## 10. 테스트 / 개발 규칙
 - **TDD** — 단위(순수 함수: messageId/header/parser/mapper/logger) + 통합(testcontainers PG: repo/projection/messageProcessor). E2E는 실 인프라로 수동 검증(중복·동시성·로테이션 등).
