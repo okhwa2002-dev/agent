@@ -80,6 +80,47 @@ export class RedisStreamQueue {
       .exec();
   }
 
+  /** 워커 전용 큐 생성: 블로킹 XREADGROUP이 다른 명령(enqueue/ack)을 막지 않도록 전용 연결 사용. */
+  forWorker(): RedisStreamQueue {
+    const q = new RedisStreamQueue(this.redis.duplicate(), this.opts);
+    q.owned = true;
+    return q;
+  }
+
+  /** forWorker로 만든 전용 연결 해제(원본 큐의 공유 연결은 건드리지 않음). */
+  async close(): Promise<void> {
+    if (this.owned) await this.redis.quit();
+  }
+
+  private owned = false; // duplicate()로 만든 전용 연결 소유 여부
+
+  /** DLQ 적재분 조회(오래된 순). */
+  async listDlq(count: number): Promise<{ id: string; msg: QueueMessage }[]> {
+    const res = (await this.redis.xrange(this.opts.dlqStream, '-', '+', 'COUNT', count)) as [string, string[]][];
+    return res.map(([id, fields]) => ({ id, msg: parseFields(fields) }));
+  }
+
+  /** DLQ → 원본 스트림 재투입(원인 수정 후). id 지정 시 해당 건만, 생략 시 전부. 이동 건수 반환. */
+  async requeueDlq(id?: string): Promise<number> {
+    let moved = 0;
+    for (;;) {
+      const entries = id
+        ? ((await this.redis.xrange(this.opts.dlqStream, id, id)) as [string, string[]][])
+        : ((await this.redis.xrange(this.opts.dlqStream, '-', '+', 'COUNT', 100)) as [string, string[]][]);
+      if (entries.length === 0) break;
+      for (const [entryId, fields] of entries) {
+        const m = parseFields(fields);
+        await this.redis.multi() // 재투입+삭제 원자 실행(중복 재투입 방지)
+          .xadd(this.opts.stream, '*', 'topic', m.topic, 'payload', m.payload, 'receivedAt', m.receivedAt)
+          .xdel(this.opts.dlqStream, entryId)
+          .exec();
+        moved++;
+      }
+      if (id) break; // 단건 모드는 1회로 종료
+    }
+    return moved;
+  }
+
   /** poison: DLQ 적재 + 원본 XACK/XDEL을 MULTI로 원자 실행(DLQ 중복 적재 방지). */
   async toDlq(e: ClaimedEntry): Promise<void> {
     await this.redis.multi()

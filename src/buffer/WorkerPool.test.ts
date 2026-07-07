@@ -20,6 +20,8 @@ function fakeQueue(first: ClaimedEntry[]): RedisStreamQueue & { acked: string[];
     reclaim: vi.fn(async () => { await sleep(5); return []; }),
     ack: vi.fn(async (id: string) => { acked.push(id); }),
     toDlq: vi.fn(async (e: ClaimedEntry) => { dlq.push(e.id); acked.push(e.id); }),
+    forWorker(this: unknown) { return this; }, // 단위 테스트: 전용 연결 없이 자신을 반환
+    close: vi.fn().mockResolvedValue(undefined),
   } as unknown as RedisStreamQueue & { acked: string[]; dlq: string[] };
 }
 

@@ -34,27 +34,33 @@ export class WorkerPool {
   }
 
   private async loop(consumer: string): Promise<void> {
-    while (this.running) {
-      try {
-        const reclaimed = await this.queue.reclaim(consumer, this.opts.idleReclaimMs, 10);
-        for (const e of reclaimed) await this.process(e);
-        const claimed = await this.queue.claim(consumer, 50, this.opts.blockMs);
-        for (const e of claimed) await this.process(e);
-      } catch (err) {
-        logger.error({ msg: 'worker loop error', consumer, err: String(err) });
-        await sleep(this.opts.blockMs);
+    // 워커 전용 연결: 블로킹 claim(XREADGROUP BLOCK)이 enqueue·타 워커 명령을 막지 않게 한다.
+    const queue = this.queue.forWorker();
+    try {
+      while (this.running) {
+        try {
+          const reclaimed = await queue.reclaim(consumer, this.opts.idleReclaimMs, 10);
+          for (const e of reclaimed) await this.process(queue, e);
+          const claimed = await queue.claim(consumer, 50, this.opts.blockMs);
+          for (const e of claimed) await this.process(queue, e);
+        } catch (err) {
+          logger.error({ msg: 'worker loop error', consumer, err: String(err) });
+          await sleep(this.opts.blockMs);
+        }
       }
+    } finally {
+      await queue.close();
     }
   }
 
-  private async process(e: ClaimedEntry): Promise<void> {
+  private async process(queue: RedisStreamQueue, e: ClaimedEntry): Promise<void> {
     try {
       await this.handler(e.msg.topic, Buffer.from(e.msg.payload));
-      await this.queue.ack(e.id);
+      await queue.ack(e.id);
     } catch (err) {
       if (e.deliveries > this.opts.maxRetry) {
         logger.error({ msg: 'message moved to DLQ', id: e.id, deliveries: e.deliveries, err: String(err) });
-        await this.queue.toDlq(e);
+        await queue.toDlq(e);
       } else {
         // ack 안 함 → 다음 reclaim(XAUTOCLAIM)에서 재처리
         logger.error({ msg: 'process failed (will retry)', id: e.id, deliveries: e.deliveries, err: String(err) });
