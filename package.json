@@ -7,6 +7,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "node dist/main.js",
+    "reprocess": "node dist/reprocess.js",
     "pub": "node scripts/pub.mjs"
   },
   "dependencies": {

@@ -14,4 +14,24 @@
     UPDATE messages_raw SET error_yn = 'Y', error_detail = #{errorDetail} WHERE message_id = #{messageId}
   </update>
 
+  <select id="findErrorRows">
+    SELECT message_id, device_id, imei, message_code, raw_payload
+    FROM messages_raw
+    WHERE error_yn = 'Y' AND message_id > #{afterMessageId}
+    ORDER BY message_id
+    LIMIT #{limit}
+  </select>
+
+  <update id="assignDevice">
+    UPDATE messages_raw SET device_id = #{deviceId}, error_yn = 'N', error_detail = NULL WHERE message_id = #{messageId}
+  </update>
+
+  <update id="clearError">
+    UPDATE messages_raw SET error_yn = 'N', error_detail = NULL WHERE message_id = #{messageId}
+  </update>
+
+  <select id="countErrors">
+    SELECT count(*)::int AS c FROM messages_raw WHERE error_yn = 'Y'
+  </select>
+
 </mapper>

@@ -41,4 +41,41 @@ export class RawRepo {
     const { text, values } = getQuery('raw', 'markError', { messageId, errorDetail });
     await this.pool.query(text, values);
   }
+
+  /** 재처리 대상 조회: error_yn='Y' 행을 message_id keyset으로 배치 조회. */
+  async findErrorRows(afterMessageId: string, limit: number): Promise<ErrorRawRow[]> {
+    const { text, values } = getQuery('raw', 'findErrorRows', { afterMessageId, limit });
+    const res = await this.pool.query<{ message_id: string; device_id: string | null; imei: string | null; message_code: string; raw_payload: unknown }>(text, values);
+    return res.rows.map((r) => ({
+      messageId: r.message_id, deviceId: r.device_id, imei: r.imei,
+      messageCode: r.message_code, rawPayload: r.raw_payload,
+    }));
+  }
+
+  /** 단말 매핑 갱신(뒤늦게 등록된 단말) + 에러 해제. */
+  async assignDevice(messageId: string, deviceId: string): Promise<void> {
+    const { text, values } = getQuery('raw', 'assignDevice', { messageId, deviceId });
+    await this.pool.query(text, values);
+  }
+
+  /** 에러 해제: error_yn='N' + error_detail 제거 (재처리 직전 초기화). */
+  async clearError(messageId: string): Promise<void> {
+    const { text, values } = getQuery('raw', 'clearError', { messageId });
+    await this.pool.query(text, values);
+  }
+
+  /** 지표: error_yn='Y' 행 수. */
+  async countErrors(): Promise<number> {
+    const { text, values } = getQuery('raw', 'countErrors');
+    const res = await this.pool.query<{ c: number }>(text, values);
+    return res.rows[0].c;
+  }
+}
+
+export interface ErrorRawRow {
+  messageId: string;
+  deviceId: string | null;
+  imei: string | null;
+  messageCode: string;
+  rawPayload: unknown;  // JSONB → 파싱된 객체
 }
