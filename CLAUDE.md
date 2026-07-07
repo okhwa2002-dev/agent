@@ -6,6 +6,7 @@
 - 구현 계획: [docs/superpowers/plans/](docs/superpowers/plans/)
 - MQTT 발행·테스트 사용법: [docs/mqtt-usage.md](docs/mqtt-usage.md)
 - 부하 테스트 보고서: [docs/load-test-report.md](docs/load-test-report.md)
+- **운영 가이드(명령어 모음): [docs/operations.md](docs/operations.md)** — 기동/종료, 헬스·지표, 단말 등록, 재처리, DLQ, 장애 대응
 
 ---
 
@@ -54,7 +55,8 @@ claim → JSON 파싱
      → imei로 device_id 조회
      → messages_raw INSERT (device_id 포함, ON CONFLICT DO NOTHING)  [내구성 지점]
         ├ INSERT 실패(PG 다운) → XACK 안 함 → reclaim 재시도 (한도 초과 시 DLQ)
-        ├ 중복(message_key) → XACK 후 종료
+        ├ 중복(message_key) → 기존 message_id로 파생 멱등 재실행 후 XACK
+        │                     (원본 저장 직후 크래시로 누락된 파생 복구)
         └ 신규 → ★ Redis XACK ★
      → 분기
         ├ device_id 없음(미등록) → error_yn=Y + error_detail + error_log(device_lookup) → 종료
@@ -119,7 +121,7 @@ src/
 │   └── messageId.ts        # 결정적 멱등 키 유도(순수)
 ├── buffer/
 │   ├── redisPool.ts        # ioredis 클라이언트 팩토리
-│   ├── RedisStreamQueue.ts # Redis Streams 큐(enqueue/claim/reclaim/ack/toDlq)
+│   ├── RedisStreamQueue.ts # Redis Streams 큐(enqueue/claim/reclaim/ack/toDlq/listDlq/requeueDlq)
 │   └── WorkerPool.ts       # K개 워커 드레인 풀(consumer group, DLQ)
 ├── header.ts               # rawPayload → 공통 헤더 추출(순수)
 ├── db/
@@ -149,7 +151,9 @@ src/
 ├── config/config.ts        # 환경설정 로드
 ├── types.ts                # RawMessage, Clock
 ├── main.ts                 # 조립(DI: Redis 큐+워커풀+수신부) + graceful shutdown
-└── reprocess.ts            # 재처리 배치 CLI 진입점 (npm run reprocess)
+├── reprocess.ts            # 재처리 배치 CLI 진입점 (npm run reprocess)
+├── dlq.ts                  # DLQ 조회·재투입 CLI 진입점 (npm run dlq)
+└── device.ts               # 단말 등록/목록 CLI 진입점 (npm run device)
 ```
 
 설계 원칙: 각 파일은 단일 책임. 파서·헤더 추출 등 변환 로직은 I/O 없는 순수 함수로 격리하여 단위 테스트 가능. `MessageProcessor`가 유일한 처리 오케스트레이터.
@@ -171,18 +175,19 @@ npm run build      # tsc + dist/db/schema.sql 복사
 npm test           # vitest run (통합 테스트는 Docker 필요)
 ```
 
-> 통합 테스트는 `@testcontainers/postgresql`로 실제 PostgreSQL 컨테이너를 띄운다. **로컬에 Docker 필요.**
+> 통합 테스트는 testcontainers로 실제 컨테이너(PostgreSQL·Redis·Mosquitto)를 띄운다. **로컬에 Docker 필요.** E2E(`src/e2e.test.ts`)는 전체 파이프라인을 조립해 300건 폭주 무손실을 검증하며, push/PR 시 GitHub Actions CI(`.github/workflows/ci.yml`)에서도 동일하게 실행된다.
 
 ### 환경변수 (`src/config/config.ts`)
 | 변수 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
 | `DATABASE_URL` | ✅ | — | PostgreSQL 연결 문자열 |
-| `MQTT_URL` | ✅ | — | MQTT 브로커 URL (예: `mqtt://localhost:1883`) |
+| `MQTT_URL` | ✅ | — | MQTT 브로커 URL — 브로커 인증 계정을 URL에 포함 (예: `mqtt://agent:agentmqttpw@localhost:1883`) |
 | `MQTT_TOPIC` | ✅ | — | 구독 토픽 (예: `device/+/msg`) |
 | `MQTT_CLIENT_ID` | | `edge-agent` | clean:false durable 세션용 안정 ID |
-| `REDIS_URL` | ✅ | — | Redis 버퍼 연결 URL (예: `redis://localhost:6379`) |
+| `REDIS_URL` | ✅ | — | Redis 버퍼 연결 URL — requirepass 비밀번호 포함 (예: `redis://:agentredispw@localhost:6379`) |
 | `WORKER_CONCURRENCY` | | `4` | 처리 워커 수 K (pg 풀은 `K+4`로 생성) |
 | `METRICS_PORT` | | `9100` | 관측성 HTTP 포트 (`/health`, `/metrics`). `0`이면 비활성 |
+| `METRICS_HOST` | | `127.0.0.1` | 관측성 바인드 주소 (기본 로컬 전용, 컨테이너는 `0.0.0.0`) |
 
 QoS는 1로 고정. 토픽은 `device/<deviceId>/...` 형식을 가정한다(두 번째 세그먼트를 보조 deviceId로 추출). 스트림/그룹/DLQ 이름은 `messages:stream` / `agent-workers` / `messages:dlq`로 고정.
 
@@ -195,7 +200,15 @@ docker compose up -d         # mosquitto(1883/9001) + postgres(5435) + redis(637
 cp .env.example .env         # 값 확인 후
 npm run build && npm start
 ```
-기동 시 스키마가 자동 적용된다. 메시지가 처리되려면 해당 `imei`가 `devices`에 등록되어 있어야 한다(미등록은 원본+에러만 기록).
+기동 시 스키마가 자동 적용된다. 메시지가 처리되려면 해당 `imei`가 `devices`에 등록되어 있어야 한다(미등록은 원본+에러만 기록). 등록: `npm run device -- register <imei>`.
+
+> **인증·인가(하드닝):** Mosquitto는 익명 차단 + 계정 파일([passwd](docker/mosquitto/config/passwd): `agent`(에이전트/운영), `device`(단말 공용)) + **ACL**([acl](docker/mosquitto/config/acl): 단말은 자기 clientId 토픽 `device/%c/msg`에만 발행, 구독은 agent만) + `message_size_limit 64KB`. Redis는 `requirepass`. 클라이언트는 URL에 계정 포함(`.env.example` 참조). **포트 노출**: MQTT(1883/9001)만 외부 공개, PG(5435)·Redis(6379)·관측성(9100)은 `127.0.0.1` 바인딩(로컬 전용). compose 크리덴셜은 `${POSTGRES_PASSWORD:-...}` 식 env 주입 — **운영 배포 시 dev 기본 계정 반드시 교체**(mosquitto_passwd 재생성 + `.env`). catch-all 파생은 본문 키 200개 상한(초과 시 error_yn=Y 격리). TLS는 미적용(향후 과제).
+
+### 에이전트 컨테이너 실행 (supervision)
+```bash
+docker compose --profile agent up -d --build   # Dockerfile 빌드 + restart: unless-stopped + /health 헬스체크
+```
+크래시 시 Docker가 자동 재기동하고, `HEALTHCHECK`가 `/health`(9100)를 15초 주기로 확인한다. 로컬 개발(`npm start`)과 **동시에 띄우지 말 것**(같은 `MQTT_CLIENT_ID`·9100 포트 충돌).
 
 **부하 테스트:** `node scripts/load.mjs --count 2000 --imei load-001 --topic device/A/msg`로 N건을 순간 발행하고, `messages_raw` 건수 == N(중복·에러 0)인지 확인한다.
 
@@ -205,6 +218,15 @@ npm run build && npm start
 - **`GET /health`**: `{ok, mqtt, redis, pg}` JSON. MQTT 연결·Redis ping·PG SELECT 1 모두 정상이면 200, 하나라도 실패면 503 (liveness/readiness 프로브용).
 - **`GET /metrics`**: Prometheus 텍스트. `agent_stream_backlog`(스트림 잔량 XLEN), `agent_stream_pending`(미ack XPENDING), `agent_dlq_depth`(DLQ 적재), `agent_raw_error_rows`(error_yn='Y' 건수), `agent_error_log_total{stage=...}`(단계별 오류 건수).
 - PG 장기 다운 시 `agent_stream_backlog` 증가로 적체를 감지할 수 있다(경보 기준으로 사용 권장).
+
+### DLQ 운영 (poison 메시지 조회·재투입)
+
+```bash
+npm run dlq -- list [n]        # 적재분 조회 (오래된 순, 기본 20건, JSON 한 줄씩)
+npm run dlq -- requeue [id]    # 원인 수정 후 messages:stream으로 재투입. id 생략 시 전부
+```
+
+`REDIS_URL`만 필요(에이전트와 별개 실행 가능). 재투입 건은 새 엔트리로 적재되어 delivery 카운트가 리셋되고 워커가 다시 처리한다. 재투입+DLQ 삭제는 MULTI로 원자 실행(중복 재투입 방지). 적체량은 `/metrics`의 `agent_dlq_depth`로 감시.
 
 ### 원본 재처리 배치 (단말 등록·파서 수정 후 복구)
 
@@ -253,6 +275,11 @@ npm run reprocess    # DATABASE_URL만 필요 (에이전트와 별개 실행 가
 9. **DLQ 판정 버그 수정 + 원본 재처리 배치:** `reclaim`이 delivery 횟수를 2로 하드코딩해 `maxRetry` 초과 판정이 영원히 거짓(poison 무한 재시도)이던 버그를 XPENDING 실측 조회로 수정. `error_yn='Y'` 원본에서 파생을 복구하는 재처리 배치(`npm run reprocess`, §5) 추가 — 뒤늦게 등록된 단말 매핑·파서 수정 반영, 멱등.
 10. **관측성:** `/health`(MQTT·Redis·PG 상태, 200/503) + `/metrics`(Prometheus: 스트림 적체·미ack·DLQ·에러 건수) HTTP 서버 추가(`METRICS_PORT`, 기본 9100, 무의존 node:http). SIGINT/SIGTERM 중복 수신 가드도 추가.
 11. **Redis 큐 하드닝:** consumer group 시작점 `'$'`→`'0'`(그룹 재생성 시 기존 잔량 유실 방지), `ack`(XACK+XDEL)·`toDlq`(DLQ XADD+XACK+XDEL)를 MULTI로 원자화(중간 크래시 시 acked 엔트리 잔류·DLQ 중복 적재 방지).
+12. **중복 재수신 시 파생 복구:** 원본 INSERT 직후 크래시하면 재처리에서 중복 판정으로 파생이 조용히 누락되던 구멍을 수정 — 중복이어도 기존 `message_id`를 조회해 위치/업무 파생을 멱등 재실행(전 도메인 INSERT가 ON CONFLICT DO NOTHING이라 안전).
+13. **DLQ 운영 도구:** `npm run dlq -- list|requeue`(§5) 추가 — poison 적재분 조회, 원인 수정 후 스트림 재투입(MULTI 원자, delivery 리셋).
+14. **보안·운영 하드닝:** Mosquitto 익명 차단+계정 파일, Redis requirepass(클라이언트는 URL 인증), 에이전트 Dockerfile+compose `agent` 프로파일(restart 정책+`/health` HEALTHCHECK로 supervision), 단말 등록 CLI(`npm run device -- register|list`). 전 구간 실검증(인증 브로커 발행→domain_fault 저장, 컨테이너 healthy).
+15. **보안 하드닝 2차:** PG·Redis·관측성 포트 `127.0.0.1` 바인딩(외부 공개는 MQTT만), MQTT ACL(단말은 자기 clientId 토픽만 발행 — 브로커 Denied 실검증) + `device` 계정 분리, `message_size_limit 64KB`(70KB 발행 Dropped 실검증), catch-all 키 200개 상한(TDD), compose 크리덴셜 env 주입화, 컨테이너 non-root(`USER node`) + `METRICS_HOST`(기본 127.0.0.1).
+16. **E2E 자동화 + 수신 병목 수정:** `src/e2e.test.ts`(Mosquitto+PG+Redis 컨테이너, main.ts와 동일 배선, 300건 폭주 → 전량·무중복·에러 0 검증) + GitHub Actions CI(`.github/workflows/ci.yml`). E2E가 **수신 enqueue와 워커의 블로킹 XREADGROUP이 단일 Redis 연결을 공유해 수신 처리량이 ~4건/s로 캡핑되던 병목**을 발견 — 워커별 전용 연결(`forWorker()`, duplicate)로 분리해 300건 저장 78초 → 1초로 개선.
 
 상세 단계별 계획과 코드는 `docs/superpowers/plans/`의 각 계획 문서에 기록되어 있다(Redis 버퍼: [docs/superpowers/plans/2026-06-12-redis-buffer.md](docs/superpowers/plans/2026-06-12-redis-buffer.md)).
 
@@ -262,6 +289,7 @@ npm run reprocess    # DATABASE_URL만 필요 (에이전트와 별개 실행 가
 
 - 추가 업무 테이블(§6 절차로 확장).
 - 관측성 확장: end-to-end latency 지표, 처리 건수 카운터(throughput).
-- DLQ 운영: `messages:dlq` 적재분 조회·재처리(원인 수정 후 stream으로 재투입) 도구.
 - Redis 장애/재시작 내구성 검증(AOF 복구), 워커 수 K 튜닝 가이드.
-- E2E: `docker compose`(Mosquitto+PG+Redis) + 에이전트로 단말→DB 전 구간·폭주 무손실 자동 검증(현재 `scripts/load.mjs` 수동 검증 → CI화).
+- TLS: MQTT(8883)·Redis·PG 전송 암호화 (인증서 체계 등 인프라 결정 필요).
+- payload imei ↔ 토픽 deviceId 대조 검증(imei 스푸핑 방지 — 단말 식별 스펙 확정 필요).
+- 운영 배포 시 dev 기본 계정 교체 절차(compose는 env 주입 완료, mosquitto passwd 재생성은 수동 — secret 관리 체계).
