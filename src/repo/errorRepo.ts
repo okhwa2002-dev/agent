@@ -29,4 +29,13 @@ export class ErrorRepo {
     });
     await this.pool.query(text, values);
   }
+
+  /** 지표: 단계별 오류 건수. */
+  async countByStage(): Promise<Record<string, number>> {
+    const { text, values } = getQuery('error', 'countByStage');
+    const res = await this.pool.query<{ stage: string; c: number }>(text, values);
+    const out: Record<string, number> = {};
+    for (const r of res.rows) out[r.stage] = r.c;
+    return out;
+  }
 }

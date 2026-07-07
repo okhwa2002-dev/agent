@@ -12,9 +12,19 @@ describe('loadConfig', () => {
     expect(cfg.mqttClientId).toBe('edge-agent');
     expect(cfg.redisUrl).toBe('redis://localhost:6379');
     expect(cfg.workerConcurrency).toBe(4);
+    expect(cfg.metricsPort).toBe(9100); // 기본값
   });
 
   it('필수 변수 누락 시 throw', () => {
     expect(() => loadConfig({})).toThrow(/DATABASE_URL/);
+  });
+
+  it('METRICS_PORT 지정·비활성(0)을 지원한다', () => {
+    const base = {
+      DATABASE_URL: 'postgres://localhost/db', MQTT_URL: 'mqtt://localhost:1883', MQTT_TOPIC: 'device/+/msg',
+      REDIS_URL: 'redis://localhost:6379',
+    };
+    expect(loadConfig({ ...base, METRICS_PORT: '9200' }).metricsPort).toBe(9200);
+    expect(loadConfig({ ...base, METRICS_PORT: '0' }).metricsPort).toBe(0);
   });
 });

@@ -6,4 +6,8 @@
     VALUES (#{messageId}, #{messageKey}, #{stage}, #{messageCode}, #{imei}, #{detail}, #{rawText})
   </insert>
 
+  <select id="countByStage">
+    SELECT stage, count(*)::int AS c FROM error_log GROUP BY stage
+  </select>
+
 </mapper>

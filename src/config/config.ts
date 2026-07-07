@@ -6,6 +6,7 @@ export interface AppConfig {
   qos: 0 | 1 | 2;
   redisUrl: string;
   workerConcurrency: number;
+  metricsPort: number;      // /health,/metrics HTTP 포트 (0=비활성)
 }
 
 function required(env: Record<string, string | undefined>, key: string): string {
@@ -23,5 +24,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     qos: 1,
     redisUrl: required(env, 'REDIS_URL'),
     workerConcurrency: Number(env.WORKER_CONCURRENCY ?? '4'),
+    metricsPort: Number(env.METRICS_PORT ?? '9100'),
   };
 }

@@ -48,6 +48,11 @@ export class MqttSubscriber {
     await client.subscribeAsync(this.opts.topic, { qos: this.opts.qos });
   }
 
+  /** 브로커 연결 상태 (헬스체크용). */
+  isConnected(): boolean {
+    return this.client?.connected ?? false;
+  }
+
   async stop(): Promise<void> {
     await this.client?.endAsync();
   }

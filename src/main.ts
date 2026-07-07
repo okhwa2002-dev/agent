@@ -17,6 +17,8 @@ import { MqttSubscriber } from './ingest/MqttSubscriber.js';
 import { createRedis } from './buffer/redisPool.js';
 import { RedisStreamQueue } from './buffer/RedisStreamQueue.js';
 import { WorkerPool } from './buffer/WorkerPool.js';
+import { StatsCollector } from './metrics/statsCollector.js';
+import { MetricsServer } from './metrics/metricsServer.js';
 import { systemClock } from './types.js';
 
 async function main(): Promise<void> {
@@ -46,11 +48,26 @@ async function main(): Promise<void> {
     (topic, payload) => queue.enqueue({ topic, payload: payload.toString('utf8'), receivedAt: systemClock.now().toISOString() }),
   );
   await subscriber.start();
-  logger.info({ msg: 'agent started', clientId: cfg.mqttClientId, workers: cfg.workerConcurrency });
 
+  // 관측성: /health + /metrics (METRICS_PORT=0이면 비활성)
+  let metrics: MetricsServer | undefined;
+  if (cfg.metricsPort > 0) {
+    const collector = new StatsCollector(
+      { redis, pool, rawRepo, errorRepo, isMqttConnected: () => subscriber.isConnected() },
+      { stream: 'messages:stream', group: 'agent-workers', dlqStream: 'messages:dlq' },
+    );
+    metrics = new MetricsServer(collector, cfg.metricsPort);
+    await metrics.start();
+  }
+  logger.info({ msg: 'agent started', clientId: cfg.mqttClientId, workers: cfg.workerConcurrency, metricsPort: cfg.metricsPort });
+
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return; // SIGINT/SIGTERM 중복 수신 가드
+    shuttingDown = true;
     await subscriber.stop();
     await workers.stop();
+    await metrics?.stop();
     await redis.quit();
     await pool.end();
     logger.info({ msg: 'agent stopped' });
