@@ -44,6 +44,25 @@ describe('RedisStreamQueue', () => {
     expect(reclaimed[0].deliveries).toBeGreaterThanOrEqual(2);
   });
 
+  it('reclaim은 실제 delivery 횟수를 보고한다(재시도마다 증가 → maxRetry 초과 판정 가능)', async () => {
+    const q = newQueue('s5'); await q.init();
+    await q.enqueue({ topic: 't', payload: 'poison', receivedAt: 'r' });
+    await q.claim('worker-0', 10, 50); // 1차 전달(ack 안 함)
+    await q.reclaim('worker-1', 0, 10); // 2차 전달
+    await q.reclaim('worker-1', 0, 10); // 3차 전달
+    const [e] = await q.reclaim('worker-1', 0, 10); // 4차 전달
+    expect(e.deliveries).toBe(4);
+  });
+
+  it('그룹 생성 전에 적재된 엔트리도 claim된다(그룹 재생성 시 잔량 유실 방지)', async () => {
+    const q = newQueue('s6');
+    await q.enqueue({ topic: 't', payload: 'before-group', receivedAt: 'r' }); // 그룹 없이 XADD
+    await q.init(); // 그룹을 나중에 생성해도 기존 잔량이 보여야 함
+    const claimed = await q.claim('worker-0', 10, 50);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0].msg.payload).toBe('before-group');
+  });
+
   it('toDlq는 원본을 DLQ로 옮기고 ack한다', async () => {
     const q = newQueue('s4'); await q.init();
     await q.enqueue({ topic: 't', payload: 'poison', receivedAt: 'r' });
