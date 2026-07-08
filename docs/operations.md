@@ -53,6 +53,11 @@ curl http://localhost:9100/metrics
 | `agent_dlq_depth` | DLQ(poison) 적재 건수 | > 0이면 §5 절차로 처리 |
 | `agent_raw_error_rows` | `error_yn='Y'` 원본 건수 | 증가 시 §4 재처리 검토 |
 | `agent_error_log_total{stage=...}` | 단계별 오류 건수 | stage별 원인 분석 |
+| `agent_processed_total` | 처리 성공(ack) 누적 — 처리율 = `rate()` | 유입 대비 처리율 급락 시 병목 의심 |
+| `agent_process_failed_total` | 처리 실패(재시도) 누적 | 증가 추세면 PG/파서 점검 |
+| `agent_dlq_moved_total` | DLQ 이동 누적 | > 0이면 poison 발생 이력 |
+| `agent_e2e_latency_ms_sum` | 수신→처리완료 지연 합 — 평균 = `rate(sum)/rate(processed_total)` | 평균 지연 급증 시 적재 지연 의심 |
+| `agent_e2e_latency_ms_max` | 최대 지연(시작 이후) | 스파이크 원인 분석용 |
 
 로그: `LOG_DIR`(기본 `./logs`)의 `agent.log` (JSON 한 줄씩, 날짜 변경 시 `agent-YYYY-MM-DD.log`로 백업).
 
@@ -144,6 +149,8 @@ node scripts/load.mjs --count 2000 --imei load-001 --topic device/A/msg  # N건 
 ```
 
 두 스크립트 모두 `.env`의 `MQTT_URL`(브로커 인증 포함)을 자동 로드한다. 다른 브로커는 `--url mqtt://user:pw@host:1883`로 지정.
+
+워커 수(`WORKER_CONCURRENCY`) 조정 기준과 K별 처리율 실측치는 [k-tuning.md](k-tuning.md) 참조.
 
 검증: `messages_raw` 건수 == N, 중복 0, `error_yn='Y'` 0 (imei가 등록돼 있을 때).
 

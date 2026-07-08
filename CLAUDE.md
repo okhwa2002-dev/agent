@@ -7,6 +7,7 @@
 - MQTT 발행·테스트 사용법: [docs/mqtt-usage.md](docs/mqtt-usage.md)
 - 부하 테스트 보고서: [docs/load-test-report.md](docs/load-test-report.md)
 - **운영 가이드(명령어 모음): [docs/operations.md](docs/operations.md)** — 기동/종료, 헬스·지표, 단말 등록, 재처리, DLQ, 장애 대응
+- 워커 수 K 튜닝 가이드: [docs/k-tuning.md](docs/k-tuning.md) — 측정 결과·재측정 방법·조정 기준
 
 ---
 
@@ -146,7 +147,8 @@ src/
 │   └── reprocessService.ts  # error_yn='Y' 원본 재처리 배치(단말 등록·파서 수정 후 복구)
 ├── metrics/
 │   ├── stats.ts             # AgentStats/HealthStatus + Prometheus 포매터(순수)
-│   ├── statsCollector.ts    # Redis(XLEN/XPENDING/DLQ)+PG(에러 건수) 수집, 헬스체크
+│   ├── counters.ts          # 처리량·지연 누적 카운터(순수, WorkerPool이 기록)
+│   ├── statsCollector.ts    # Redis(XLEN/XPENDING/DLQ)+PG(에러 건수)+counters 수집, 헬스체크
 │   └── metricsServer.ts     # /health(200/503) + /metrics HTTP 서버(node:http, 무의존)
 ├── config/config.ts        # 환경설정 로드
 ├── types.ts                # RawMessage, Clock
@@ -216,7 +218,9 @@ docker compose --profile agent up -d --build   # Dockerfile 빌드 + restart: un
 
 에이전트는 `METRICS_PORT`(기본 9100)에서 HTTP 두 엔드포인트를 노출한다(`src/metrics/`).
 - **`GET /health`**: `{ok, mqtt, redis, pg}` JSON. MQTT 연결·Redis ping·PG SELECT 1 모두 정상이면 200, 하나라도 실패면 503 (liveness/readiness 프로브용).
-- **`GET /metrics`**: Prometheus 텍스트. `agent_stream_backlog`(스트림 잔량 XLEN), `agent_stream_pending`(미ack XPENDING), `agent_dlq_depth`(DLQ 적재), `agent_raw_error_rows`(error_yn='Y' 건수), `agent_error_log_total{stage=...}`(단계별 오류 건수).
+- **`GET /metrics`**: Prometheus 텍스트.
+  - 상태 gauge: `agent_stream_backlog`(스트림 잔량 XLEN), `agent_stream_pending`(미ack XPENDING), `agent_dlq_depth`(DLQ 적재), `agent_raw_error_rows`(error_yn='Y' 건수), `agent_error_log_total{stage=...}`(단계별 오류 건수).
+  - 처리량·지연 counter(프로세스 시작 후 누적, `WorkerPool` 기록): `agent_processed_total`(처리 성공), `agent_process_failed_total`(실패·재시도), `agent_dlq_moved_total`(DLQ 이동), `agent_e2e_latency_ms_sum`(수신→처리완료 지연 합; 평균 = sum/processed, Prometheus에선 rate(sum)/rate(count)), `agent_e2e_latency_ms_max`(최대 지연).
 - PG 장기 다운 시 `agent_stream_backlog` 증가로 적체를 감지할 수 있다(경보 기준으로 사용 권장).
 
 ### DLQ 운영 (poison 메시지 조회·재투입)
@@ -279,7 +283,10 @@ npm run reprocess    # DATABASE_URL만 필요 (에이전트와 별개 실행 가
 13. **DLQ 운영 도구:** `npm run dlq -- list|requeue`(§5) 추가 — poison 적재분 조회, 원인 수정 후 스트림 재투입(MULTI 원자, delivery 리셋).
 14. **보안·운영 하드닝:** Mosquitto 익명 차단+계정 파일, Redis requirepass(클라이언트는 URL 인증), 에이전트 Dockerfile+compose `agent` 프로파일(restart 정책+`/health` HEALTHCHECK로 supervision), 단말 등록 CLI(`npm run device -- register|list`). 전 구간 실검증(인증 브로커 발행→domain_fault 저장, 컨테이너 healthy).
 15. **보안 하드닝 2차:** PG·Redis·관측성 포트 `127.0.0.1` 바인딩(외부 공개는 MQTT만), MQTT ACL(단말은 자기 clientId 토픽만 발행 — 브로커 Denied 실검증) + `device` 계정 분리, `message_size_limit 64KB`(70KB 발행 Dropped 실검증), catch-all 키 200개 상한(TDD), compose 크리덴셜 env 주입화, 컨테이너 non-root(`USER node`) + `METRICS_HOST`(기본 127.0.0.1).
-16. **E2E 자동화 + 수신 병목 수정:** `src/e2e.test.ts`(Mosquitto+PG+Redis 컨테이너, main.ts와 동일 배선, 300건 폭주 → 전량·무중복·에러 0 검증) + GitHub Actions CI(`.github/workflows/ci.yml`). E2E가 **수신 enqueue와 워커의 블로킹 XREADGROUP이 단일 Redis 연결을 공유해 수신 처리량이 ~4건/s로 캡핑되던 병목**을 발견 — 워커별 전용 연결(`forWorker()`, duplicate)로 분리해 300건 저장 78초 → 1초로 개선.
+16. **Redis 재시작 내구성 검증 + 문서 정합:** AOF everysec 컨테이너에서 적재·claim 후 `SHUTDOWN NOSAVE`(강제 종료) → 재시작 시 스트림 잔량·미ack(pending)·consumer group이 AOF 복구로 전부 보존됨을 자동 테스트로 검증(`src/buffer/redisDurability.test.ts`). mqtt-usage.md를 인증·ACL·크기 제한 반영해 갱신.
+17. **처리량·지연 지표:** `AgentCounters`(순수 누적 카운터)를 `WorkerPool`이 기록(성공/실패/DLQ 이동 + 수신 `receivedAt`→처리완료 지연 sum/max), `StatsCollector` 경유로 `/metrics`에 counter 노출. 라이브 검증(발행 3건 → processed_total 3, 평균 지연 27ms).
+18. **K 튜닝 가이드:** 2000건 폭주 드레인을 K=1/2/4/8로 실측(15.9→7.9→5.3→3.4s, 손실·에러 0) — [docs/k-tuning.md](docs/k-tuning.md)에 결과·재측정 절차·조정 기준(늘릴 신호/소용없는 경우/연결 비용) 문서화.
+18. **E2E 자동화 + 수신 병목 수정:** `src/e2e.test.ts`(Mosquitto+PG+Redis 컨테이너, main.ts와 동일 배선, 300건 폭주 → 전량·무중복·에러 0 검증) + GitHub Actions CI(`.github/workflows/ci.yml`). E2E가 **수신 enqueue와 워커의 블로킹 XREADGROUP이 단일 Redis 연결을 공유해 수신 처리량이 ~4건/s로 캡핑되던 병목**을 발견 — 워커별 전용 연결(`forWorker()`, duplicate)로 분리해 300건 저장 78초 → 1초로 개선.
 
 상세 단계별 계획과 코드는 `docs/superpowers/plans/`의 각 계획 문서에 기록되어 있다(Redis 버퍼: [docs/superpowers/plans/2026-06-12-redis-buffer.md](docs/superpowers/plans/2026-06-12-redis-buffer.md)).
 
@@ -288,8 +295,6 @@ npm run reprocess    # DATABASE_URL만 필요 (에이전트와 별개 실행 가
 ## 8. 향후 작업 (후보)
 
 - 추가 업무 테이블(§6 절차로 확장).
-- 관측성 확장: end-to-end latency 지표, 처리 건수 카운터(throughput).
-- Redis 장애/재시작 내구성 검증(AOF 복구), 워커 수 K 튜닝 가이드.
 - TLS: MQTT(8883)·Redis·PG 전송 암호화 (인증서 체계 등 인프라 결정 필요).
 - payload imei ↔ 토픽 deviceId 대조 검증(imei 스푸핑 방지 — 단말 식별 스펙 확정 필요).
 - 운영 배포 시 dev 기본 계정 교체 절차(compose는 env 주입 완료, mosquitto passwd 재생성은 수동 — secret 관리 체계).
