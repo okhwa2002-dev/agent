@@ -19,6 +19,7 @@ import { RedisStreamQueue } from './buffer/RedisStreamQueue.js';
 import { WorkerPool } from './buffer/WorkerPool.js';
 import { StatsCollector } from './metrics/statsCollector.js';
 import { MetricsServer } from './metrics/metricsServer.js';
+import { AgentCounters } from './metrics/counters.js';
 import { systemClock } from './types.js';
 
 async function main(): Promise<void> {
@@ -37,9 +38,10 @@ async function main(): Promise<void> {
   const redis = createRedis(cfg.redisUrl);
   const queue = new RedisStreamQueue(redis, { stream: 'messages:stream', group: 'agent-workers', dlqStream: 'messages:dlq' });
   await queue.init();
+  const counters = new AgentCounters(); // 처리량·지연 지표 (WorkerPool 기록 → /metrics 노출)
   const workers = new WorkerPool(queue, (topic, payload) => processor.handle(topic, payload), {
     concurrency: cfg.workerConcurrency, maxRetry: 5, blockMs: 1000, idleReclaimMs: 30000,
-  });
+  }, counters);
   await workers.start();
 
   // 수신부: 메시지를 Redis에 적재(성공 후 MQTT ack)
@@ -53,7 +55,7 @@ async function main(): Promise<void> {
   let metrics: MetricsServer | undefined;
   if (cfg.metricsPort > 0) {
     const collector = new StatsCollector(
-      { redis, pool, rawRepo, errorRepo, isMqttConnected: () => subscriber.isConnected() },
+      { redis, pool, rawRepo, errorRepo, isMqttConnected: () => subscriber.isConnected(), counters },
       { stream: 'messages:stream', group: 'agent-workers', dlqStream: 'messages:dlq' },
     );
     metrics = new MetricsServer(collector, cfg.metricsPort, cfg.metricsHost);

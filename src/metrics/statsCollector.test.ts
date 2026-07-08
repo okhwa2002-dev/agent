@@ -9,6 +9,7 @@ import { RawRepo } from '../repo/rawRepo.js';
 import { ErrorRepo } from '../repo/errorRepo.js';
 import { RedisStreamQueue } from '../buffer/RedisStreamQueue.js';
 import { StatsCollector } from './statsCollector.js';
+import { AgentCounters } from './counters.js';
 import { extractHeader } from '../header.js';
 
 let redisContainer: StartedRedisContainer;
@@ -72,6 +73,25 @@ describe('StatsCollector', () => {
     const s = await collector.collect();
     expect(s.rawErrorRows).toBe(1);
     expect(s.errorLogByStage).toEqual({ ingest: 2, projection: 1 });
+  });
+
+  it('주입된 counters(처리량·지연)를 collect 결과에 포함한다', async () => {
+    const counters = new AgentCounters();
+    counters.processedTotal = 7;
+    counters.processFailedTotal = 2;
+    counters.dlqMovedTotal = 1;
+    counters.e2eLatencySumMs = 1400;
+    counters.e2eLatencyMaxMs = 500;
+    const withCounters = new StatsCollector(
+      { redis, pool, rawRepo: new RawRepo(pool), errorRepo: new ErrorRepo(pool), isMqttConnected: () => true, counters },
+      OPTS,
+    );
+    const s = await withCounters.collect();
+    expect(s.processedTotal).toBe(7);
+    expect(s.processFailedTotal).toBe(2);
+    expect(s.dlqMovedTotal).toBe(1);
+    expect(s.e2eLatencySumMs).toBe(1400);
+    expect(s.e2eLatencyMaxMs).toBe(500);
   });
 
   it('health: redis/pg/mqtt 모두 정상이면 ok=true', async () => {

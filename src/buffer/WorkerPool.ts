@@ -1,5 +1,7 @@
 import type { RedisStreamQueue, ClaimedEntry } from './RedisStreamQueue.js';
 import { logger } from '../logger.js';
+import { AgentCounters } from '../metrics/counters.js';
+import { systemClock, type Clock } from '../types.js';
 
 export type Handler = (topic: string, payload: Buffer) => Promise<void>;
 
@@ -19,6 +21,8 @@ export class WorkerPool {
     private readonly queue: RedisStreamQueue,
     private readonly handler: Handler,
     private readonly opts: WorkerPoolOptions,
+    private readonly counters: AgentCounters = new AgentCounters(), // 처리량·지연 지표 (미주입 시 자체 보관)
+    private readonly clock: Clock = systemClock,
   ) {}
 
   async start(): Promise<void> {
@@ -57,13 +61,16 @@ export class WorkerPool {
     try {
       await this.handler(e.msg.topic, Buffer.from(e.msg.payload));
       await queue.ack(e.id);
+      this.counters.recordProcessed(this.clock.now().getTime() - Date.parse(e.msg.receivedAt));
     } catch (err) {
       if (e.deliveries > this.opts.maxRetry) {
         logger.error({ msg: 'message moved to DLQ', id: e.id, deliveries: e.deliveries, err: String(err) });
         await queue.toDlq(e);
+        this.counters.recordDlqMoved();
       } else {
         // ack 안 함 → 다음 reclaim(XAUTOCLAIM)에서 재처리
         logger.error({ msg: 'process failed (will retry)', id: e.id, deliveries: e.deliveries, err: String(err) });
+        this.counters.recordFailed();
       }
     }
   }

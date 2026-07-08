@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import type { RawRepo } from '../repo/rawRepo.js';
 import type { ErrorRepo } from '../repo/errorRepo.js';
 import type { AgentStats, HealthStatus } from './stats.js';
+import { AgentCounters } from './counters.js';
 
 export interface StatsCollectorDeps {
   redis: Redis;
@@ -10,6 +11,7 @@ export interface StatsCollectorDeps {
   rawRepo: RawRepo;
   errorRepo: ErrorRepo;
   isMqttConnected: () => boolean;
+  counters?: AgentCounters; // WorkerPool과 공유하는 처리량·지연 누적
 }
 
 export interface StatsCollectorOptions {
@@ -34,12 +36,18 @@ export class StatsCollector {
       rawRepo.countErrors(),
       errorRepo.countByStage(),
     ]);
+    const c = this.deps.counters ?? new AgentCounters();
     return {
       streamBacklog,
       streamPending: Number(pending?.[0] ?? 0),
       dlqDepth,
       rawErrorRows,
       errorLogByStage,
+      processedTotal: c.processedTotal,
+      processFailedTotal: c.processFailedTotal,
+      dlqMovedTotal: c.dlqMovedTotal,
+      e2eLatencySumMs: c.e2eLatencySumMs,
+      e2eLatencyMaxMs: c.e2eLatencyMaxMs,
     };
   }
 

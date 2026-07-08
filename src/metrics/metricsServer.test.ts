@@ -4,6 +4,7 @@ import type { AgentStats, HealthStatus } from './stats.js';
 
 const stats: AgentStats = {
   streamBacklog: 7, streamPending: 0, dlqDepth: 0, rawErrorRows: 0, errorLogByStage: {},
+  processedTotal: 0, processFailedTotal: 0, dlqMovedTotal: 0, e2eLatencySumMs: 0, e2eLatencyMaxMs: 0,
 };
 
 function source(health: HealthStatus): StatsSource {
