@@ -2,8 +2,17 @@
 
 단말기 시뮬레이션 — Mosquitto 브로커로 메시지를 발행해 에이전트가 PostgreSQL에 저장하는 전 과정을 테스트하는 방법.
 
-- 브로커: `mqtt://localhost:1883` (docker-compose의 `agent-mosquitto`, 익명 허용)
+- 브로커: `mqtt://localhost:1883` (docker-compose의 `agent-mosquitto`, **익명 차단 — 인증 필수**)
 - 에이전트 구독 토픽: `device/+/msg`
+
+**브로커 계정 (dev 기본값 — 운영 배포 시 교체):**
+
+| 계정 | 비밀번호 | 권한(ACL) | 용도 |
+|---|---|---|---|
+| `agent` | `agentmqttpw` | `device/+/msg` 구독+발행 | 에이전트·운영자·테스트 스크립트 |
+| `device` | `devicemqttpw` | **자기 clientId 토픽**(`device/<clientId>/msg`)에만 발행 | 단말 (타 단말 토픽 발행은 브로커가 거부) |
+
+메시지 크기 제한 64KB (초과분은 브로커가 드롭).
 
 > Windows PowerShell 기준. (bash/Linux는 따옴표만 다름)
 
@@ -31,7 +40,7 @@
 docker compose up -d
 
 # (2) 단말 등록 (한 번만) — 보낼 메시지의 imei와 동일해야 정상 저장
-docker exec agent-postgres psql -U agent -d agent_db -c "INSERT INTO devices (imei) VALUES ('111222333') ON CONFLICT DO NOTHING;"
+npm run device -- register 111222333
 
 # (3) 에이전트 실행 (창1, 계속 떠 있음)
 npm run build
@@ -47,7 +56,7 @@ node scripts/pub.mjs fault
 
 ### A. Node 발행 스크립트 (권장) — `scripts/pub.mjs`
 
-이미 설치된 `mqtt`를 사용. `process_dttm`을 현재 시각으로 자동 생성하므로 매 실행이 새 메시지(중복 아님).
+이미 설치된 `mqtt`를 사용. `process_dttm`을 현재 시각으로 자동 생성하므로 매 실행이 새 메시지(중복 아님). **`.env`의 `MQTT_URL`(브로커 계정 포함)을 자동 로드**하므로 별도 인증 설정이 필요 없다.
 
 ```powershell
 # 프리셋
@@ -62,7 +71,7 @@ npm run pub -- sensor
 node scripts/pub.mjs fault --count 5            # 5번 반복
 node scripts/pub.mjs sensor --imei 111222333    # imei 변경
 node scripts/pub.mjs fault --topic device/Z/msg # 토픽 변경
-node scripts/pub.mjs fault --url mqtt://localhost:1883
+node scripts/pub.mjs fault --url mqtt://agent:agentmqttpw@localhost:1883  # 다른 브로커/계정 지정 시
 
 # 직접 JSON
 node scripts/pub.mjs '{"imei":"111222333","messageCode":"Fault","message":{"ftp":"1","sp":"2","pcode":"P9"}}'
@@ -70,7 +79,7 @@ node scripts/pub.mjs '{"imei":"111222333","messageCode":"Fault","message":{"ftp"
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--url` | env `MQTT_URL` 또는 `mqtt://localhost:1883` | 브로커 |
+| `--url` | `.env`의 `MQTT_URL` (계정 포함) | 브로커 |
 | `--topic` | `device/A/msg` | 발행 토픽 |
 | `--imei` | `111222333` | 프리셋 imei |
 | `--count` | `1` | 반복 횟수 |
@@ -79,7 +88,7 @@ node scripts/pub.mjs '{"imei":"111222333","messageCode":"Fault","message":{"ftp"
 
 ```powershell
 $msg = '{"imei":"111222333","messageCode":"Fault","process_dttm":"2026-06-10 12:00:00","message":{"ftp":"100","sp":"12","pcode":"P0001"},"latitude":"19.2","longitude":"203.1"}'
-docker exec agent-mosquitto mosquitto_pub -t "device/A/msg" -q 1 -m $msg
+docker exec agent-mosquitto mosquitto_pub -u agent -P agentmqttpw -t "device/A/msg" -q 1 -m $msg
 ```
 - PowerShell에선 JSON을 **작은따옴표 변수**(`$msg = '...'`)에 담아 넘기는 게 안전.
 - `docker exec`는 셸 없이 인자를 전달하므로 추가 escape 불필요.
@@ -88,13 +97,13 @@ docker exec agent-mosquitto mosquitto_pub -t "device/A/msg" -q 1 -m $msg
 
 발행이 브로커에 도달하는지 먼저 확인할 때 (다른 창):
 ```powershell
-docker exec agent-mosquitto mosquitto_sub -t "device/+/msg" -v
+docker exec agent-mosquitto mosquitto_sub -u agent -P agentmqttpw -t "device/+/msg" -v
 ```
 - `-v` : 토픽 + payload 함께 출력
 
 ### D. GUI / 데스크톱 도구
 
-**MQTTX(데스크톱)** 또는 **MQTT Explorer**: 연결 `localhost` / 포트 `1883` / 인증 없음 → 토픽 `device/A/msg`에 JSON 발행. 시각적으로 pub/sub 확인.
+**MQTTX(데스크톱)** 또는 **MQTT Explorer**: 연결 `localhost` / 포트 `1883` / **Username `agent`, Password `agentmqttpw`** → 토픽 `device/A/msg`에 JSON 발행. 시각적으로 pub/sub 확인.
 
 ### E. 브라우저(웹) MQTT 클라이언트 — WebSocket `ws://localhost:9001`
 
@@ -102,7 +111,7 @@ Mosquitto에 WebSocket 리스너(9001)가 열려 있어 **브라우저에서 직
 
 - **MQTTX Web**: https://mqttx.app/web-client
 - **HiveMQ Websocket Client**: http://www.hivemq.com/demos/websocket-client/
-- 접속 설정: 호스트 `localhost`, 포트 `9001`, 경로 `/`, 프로토콜 `ws` (인증 없음)
+- 접속 설정: 호스트 `localhost`, 포트 `9001`, 경로 `/`, 프로토콜 `ws`, **Username `agent`, Password `agentmqttpw`** (익명 차단·ACL은 WebSocket에도 동일 적용)
 
 > ⚠️ 브라우저 **주소창에 `http://localhost:1883` 입력은 안 됩니다** (`ERR_EMPTY_RESPONSE`). MQTT는 HTTP가 아니라 raw TCP/WebSocket입니다. 브라우저에선 위 **웹 MQTT 클라이언트**로 `ws://localhost:9001`에 접속하세요.
 >
@@ -114,6 +123,7 @@ Mosquitto에 WebSocket 리스너(9001)가 열려 있어 **브라우저에서 직
 
 - 에이전트는 **`device/+/msg`** 를 구독합니다. → 발행 토픽은 **`device/<무엇이든>/msg`** 형식이어야 합니다.
 - 토픽의 두 번째 세그먼트(`<무엇이든>`)는 보조 식별자로만 쓰이며, **정식 단말 식별은 payload의 `imei`** 입니다.
+- **`device` 계정으로 발행할 때는 ACL 때문에 토픽 두 번째 세그먼트가 접속 clientId와 일치해야 합니다** (예: clientId `dev01` → `device/dev01/msg`만 발행 가능). `agent` 계정은 제약 없음.
 
 ---
 
@@ -185,6 +195,9 @@ docker exec agent-postgres psql -U agent -d agent_db -c "SELECT message_id, stag
 
 | 증상 | 원인 / 해결 |
 |---|---|
+| `Connection Refused: not authorised` | 계정 누락/오타. `-u agent -P agentmqttpw` 또는 URL에 계정 포함 |
+| 발행 exit 0인데 구독에 안 보임 + 브로커 로그 `Denied PUBLISH` | ACL 거부 — `device` 계정이 자기 clientId와 다른 토픽에 발행 (§3 참조) |
+| 브로커 로그 `Dropped too large PUBLISH` | 메시지 64KB 초과 (`message_size_limit`) |
 | 브라우저 `ERR_EMPTY_RESPONSE` | 1883은 HTTP가 아님. `mosquitto_pub`/데스크톱 MQTT 클라이언트 사용 (또는 WebSocket 리스너 추가) |
 | `No such container: agent-mosquitto` | `docker compose ps`로 이름 확인, 안 떠 있으면 `docker compose up -d` |
 | 구독엔 보이는데 DB에 없음 | 에이전트 미실행 또는 토픽 패턴 불일치. 토픽 `device/+/msg`, 에이전트 로그 확인 |
