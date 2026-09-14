@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   const rawRepo = new RawRepo(pool);
   const errorRepo = new ErrorRepo(pool);
   const projection = new ProjectionService(defaultRegistry(), new DomainRepo(pool), rawRepo, errorRepo, new GenericRepo(pool));
-  const location = new LocationProjector(new LocationRepo(pool), errorRepo);
+  const location = new LocationProjector(new LocationRepo(pool), rawRepo, errorRepo);
   const processor = new MessageProcessor(deviceRepo, rawRepo, projection, location, errorRepo, systemClock);
 
   // Redis 버퍼 + 워커풀

@@ -1,4 +1,5 @@
 import type { LocationRepo } from '../repo/locationRepo.js';
+import type { RawRepo } from '../repo/rawRepo.js';
 import type { ErrorRepo } from '../repo/errorRepo.js';
 import type { Header } from '../header.js';
 
@@ -6,6 +7,7 @@ import type { Header } from '../header.js';
 export class LocationProjector {
   constructor(
     private readonly locationRepo: LocationRepo,
+    private readonly rawRepo: RawRepo,
     private readonly errorRepo: ErrorRepo,
   ) {}
 
@@ -14,6 +16,8 @@ export class LocationProjector {
     try {
       await this.locationRepo.insert(messageId, deviceId, header.latitude, header.longitude);
     } catch (err) {
+      // error_yn='Y'까지 표시해야 재처리 배치(error_yn='Y' 대상)가 복구할 수 있다.
+      await this.rawRepo.markError(messageId, String(err));
       await this.errorRepo.log({ messageId, stage: 'location', detail: String(err) });
     }
   }

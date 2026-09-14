@@ -29,7 +29,7 @@ beforeAll(async () => {
   await applySchema(pool);
   deviceId = await new DeviceRepo(pool).register('imei-loc');
   rawRepo = new RawRepo(pool);
-  proj = new LocationProjector(new LocationRepo(pool), new ErrorRepo(pool));
+  proj = new LocationProjector(new LocationRepo(pool), rawRepo, new ErrorRepo(pool));
 });
 
 afterAll(async () => { await pool.end(); await container.stop(); });
@@ -47,5 +47,20 @@ describe('LocationProjector', () => {
     await proj.project(mid, deviceId, { ...base, latitude: null, longitude: null });
     const r = await pool.query('SELECT 1 FROM domain_location WHERE message_id=$1', [mid]);
     expect(r.rowCount).toBe(0);
+  });
+
+  it('저장 실패 시 error_yn=Y로 표시 (재처리 배치가 복구 대상으로 잡도록)', async () => {
+    const mid = await seed('lk-3');
+    await proj.project(mid, deviceId, { ...base, latitude: 'not-a-number' }); // NUMERIC 캐스팅 실패
+    const r = await pool.query('SELECT error_yn, error_detail FROM messages_raw WHERE message_id=$1', [mid]);
+    expect(r.rows[0].error_yn).toBe('Y');
+    expect(r.rows[0].error_detail).toContain('not-a-number');
+  });
+
+  it('저장 실패 시 error_log(stage=location) 기록', async () => {
+    const mid = await seed('lk-4');
+    await proj.project(mid, deviceId, { ...base, latitude: 'not-a-number' });
+    const e = await pool.query("SELECT detail FROM error_log WHERE message_id=$1 AND stage='location'", [mid]);
+    expect(e.rowCount).toBe(1);
   });
 });
