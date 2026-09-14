@@ -2,6 +2,7 @@
 
 단말기가 MQTT로 발행하는 JSON 메시지를 엣지에서 실시간 수신하여 **원본 보관 → 단말 식별 → 업무별 파생 저장**을 단일 프로세스로 처리하고, 각 단계 오류를 추적 가능한 형태로 기록하는 에이전트.
 
+- **처리 프로세스 명세서(제출용): [docs/processing-spec.md](docs/processing-spec.md)** — 처리 흐름·보장·예외·데이터 모델·운영·보안·성능 검증 전체
 - 설계 문서: [docs/superpowers/specs/2026-06-09-realtime-message-pipeline-design.md](docs/superpowers/specs/2026-06-09-realtime-message-pipeline-design.md)
 - 구현 계획: [docs/superpowers/plans/](docs/superpowers/plans/)
 - MQTT 발행·테스트 사용법: [docs/mqtt-usage.md](docs/mqtt-usage.md)
@@ -63,7 +64,8 @@ claim → JSON 파싱
         ├ device_id 없음(미등록) → error_yn=Y + error_detail + error_log(device_lookup) → 종료
         │                          (도메인·위치 저장 안 함, 원본만 보존)
         └ device_id 있음
-             ├ 위치 projection: lat/lon 있으면 domain_location 저장 (실패 → error_log(location))
+             ├ 위치 projection: lat/lon 있으면 domain_location 저장
+             │                  (실패 → error_yn=Y + error_detail + error_log(location))
              └ messageCode projection:
                   ├ 전용 파서(Fault) → domain_<code> / 없으면(catch-all) → domain_generic(키별 행 EAV)
                   ├ 성공 → error_yn=N (그대로)
